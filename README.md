@@ -29,9 +29,10 @@ jadi bisa di-host gratis di GitHub Pages.
 2. **Palet** dibangun dari piksel "rata". Piksel transisi/antialias diabaikan, lalu varian minor (mis. tepi garis yang lebih gelap karena kompresi) dilebur.
 3. **Upscale** dengan interpolasi halus.
 4. **Benih + region growing**: piksel yang jelas cocok dengan palet dan tidak berada di lereng gradien menjadi benih. Piksel transisi diberikan ke warna tetangga terdekat, sehingga batas jatuh di titik 50%.
-5. **Pembersihan**: bintik kecil dilebur ke tetangga yang warnanya paling mirip.
-6. **Tracing pada kisi sudut piksel**: batas antar dua region dipecah menjadi rantai di titik pertemuan ≥3 region. Tiap rantai di-fit **sekali** dan dipakai kedua sisinya, jadi tidak ada celah atau tumpang tindih.
-7. **Fitting**: deteksi sudut, garis lurus, Bézier kubik (Schneider), dan elips utuh.
+5. **Garis ala siluet** (mode warna): batas antara warna garis (palet paling gelap) dan isian terang di sebelahnya ditentukan oleh ambang kecerahan di titik tengah keduanya — tepi garis rata dan tebalnya konsisten, warna tetap.
+6. **Pembersihan**: bintik kecil dilebur ke tetangga yang warnanya paling mirip.
+7. **Tracing pada kisi sudut piksel**: batas antar dua region dipecah menjadi rantai di titik pertemuan ≥3 region. Tiap rantai di-fit **sekali** dan dipakai kedua sisinya, jadi tidak ada celah atau tumpang tindih.
+8. **Fitting**: deteksi sudut, garis lurus, Bézier kubik (Schneider), dan elips utuh.
 
 ## Menjalankan lokal
 

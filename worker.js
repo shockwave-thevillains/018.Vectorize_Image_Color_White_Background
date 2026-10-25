@@ -445,7 +445,70 @@ function assignLabels(data, W, H, s, pal, o) {
   for (let i = 0, p = 0; i < N; i++, p += 4) {
     if (lab[i] === U) lab[i] = nearest(data[p], data[p + 1], data[p + 2]);
   }
+  if (o.lineThreshold !== false) lineThreshold(lab, data, W, H, pal);
   return lab;
+}
+
+// Garis ala siluet untuk mode warna: batas antara warna garis (palet paling
+// gelap) dan warna isian di sebelahnya ditentukan oleh ambang kecerahan di titik
+// tengah keduanya — fungsi mulus dari nilai piksel, bukan hasil "tumbuh" region —
+// sehingga tepi garis rata dan tebalnya konsisten. Warna tetap dipertahankan.
+function lineThreshold(lab, data, W, H, pal) {
+  const N = W * H;
+  let kl = -1;
+  pal.forEach((p, k) => { if (p.L < 45 && (kl < 0 || p.L < pal[kl].L)) kl = k; });
+  if (kl < 0) return;
+  const Y = pal.map((p) => 0.299 * p.r + 0.587 * p.g + 0.114 * p.b);
+  // Peta isian: warna non-garis terdekat untuk tiap piksel (garis diisi dari tepinya).
+  const F = new Uint8Array(lab);
+  for (let i = 0; i < N; i++) if (F[i] === kl) F[i] = U;
+  const fillOk = (l) => l < U && l !== kl;
+  let cur = [];
+  for (let i = 0; i < N; i++) {
+    if (F[i] !== U) continue;
+    const x = i % W;
+    if ((x > 0 && fillOk(F[i - 1])) || (x < W - 1 && fillOk(F[i + 1])) || (i >= W && fillOk(F[i - W])) || (i + W < N && fillOk(F[i + W]))) cur.push(i);
+  }
+  const queued = new Uint8Array(N);
+  for (const i of cur) queued[i] = 1;
+  while (cur.length) {
+    const pick = new Uint8Array(cur.length);
+    for (let n = 0; n < cur.length; n++) {
+      const i = cur[n], x = i % W, p = i * 4;
+      const y = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+      let best = U, bd = Infinity;
+      const see = (l) => { if (!fillOk(l)) return; const d = Math.abs(Y[l] - y); if (d < bd) { bd = d; best = l; } };
+      if (x > 0) see(F[i - 1]);
+      if (x < W - 1) see(F[i + 1]);
+      if (i >= W) see(F[i - W]);
+      if (i + W < N) see(F[i + W]);
+      pick[n] = best;
+    }
+    const next = [];
+    for (let n = 0; n < cur.length; n++) {
+      const i = cur[n];
+      if (pick[n] === U) continue;
+      F[i] = pick[n];
+      const x = i % W;
+      if (x > 0 && F[i - 1] === U && !queued[i - 1]) { queued[i - 1] = 1; next.push(i - 1); }
+      if (x < W - 1 && F[i + 1] === U && !queued[i + 1]) { queued[i + 1] = 1; next.push(i + 1); }
+      if (i >= W && F[i - W] === U && !queued[i - W]) { queued[i - W] = 1; next.push(i - W); }
+      if (i + W < N && F[i + W] === U && !queued[i + W]) { queued[i + W] = 1; next.push(i + W); }
+    }
+    cur = next;
+  }
+  // Ambang: lebih gelap dari titik tengah garis–isian → garis, selain itu isian.
+  for (let i = 0, p = 0; i < N; i++, p += 4) {
+    const l = lab[i];
+    if (l === T) continue;
+    const f = F[i];
+    if (f >= U) continue; // area gelap luas tanpa isian di sekitar
+    if (Y[f] - Y[kl] < 60) continue; // isian sama-sama gelap → biarkan
+    const y = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+    const dark = y < (Y[kl] + Y[f]) / 2;
+    if (dark) lab[i] = kl;
+    else if (l === kl) lab[i] = f;
+  }
 }
 
 // Satu lintasan blur binomial [1 4 6 4 1]/16 terpisah (σ ≈ 1 px), di tempat,
