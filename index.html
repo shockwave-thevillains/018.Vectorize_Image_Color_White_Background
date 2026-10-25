@@ -94,6 +94,18 @@
         <section class="group">
           <h3><span class="n mono">01</span> Pemrosesan</h3>
           <div class="field">
+            <div class="flabel">Mode</div>
+            <div class="seg wide" data-opt="mode">
+              <button type="button" data-v="color">Warna</button>
+              <button type="button" data-v="silhouette">Siluet</button>
+            </div>
+          </div>
+          <div class="field" data-show="silhouette">
+            <label class="flabel" for="silThreshold">Ambang gelap/terang <output class="mono" for="silThreshold"></output></label>
+            <input type="range" id="silThreshold" data-opt="silThreshold" min="30" max="230" step="1">
+            <div class="scale mono"><span>siluet lebih tipis</span><span>lebih tebal</span></div>
+          </div>
+          <div class="field">
             <div class="flabel">Upscale <em>sebelum tracing</em></div>
             <div class="seg wide" data-opt="upscale">
               <button type="button" data-v="1">1×</button>
@@ -102,7 +114,7 @@
               <button type="button" data-v="4">4×</button>
             </div>
           </div>
-          <div class="field">
+          <div class="field" data-show="color">
             <div class="flabel">Jumlah warna maksimum</div>
             <div class="row-inline">
               <div class="seg" data-opt="colorAuto">
@@ -112,7 +124,7 @@
               <input class="num mono" id="maxColors" type="number" min="2" max="64" step="1" value="12" aria-label="Jumlah warna maksimum">
             </div>
           </div>
-          <div class="field">
+          <div class="field" data-show="color">
             <label class="flabel" for="colorMerge">Kepekaan warna <output class="mono" for="colorMerge"></output></label>
             <input type="range" id="colorMerge" data-opt="colorMerge" min="4" max="30" step="1">
             <div class="scale mono"><span>banyak nuansa</span><span>sedikit warna</span></div>
@@ -135,7 +147,16 @@
 
         <section class="group">
           <h3><span class="n mono">02</span> Latar putih</h3>
-          <div class="field">
+          <div class="field" data-show="silhouette">
+            <div class="flabel">Rongga di dalam siluet</div>
+            <div class="seg wide" data-opt="cavity">
+              <button type="button" data-v="transparent">Transparan</button>
+              <button type="button" data-v="fill">Isi</button>
+              <button type="button" data-v="white">Putih</button>
+            </div>
+            <p class="note" id="cavityNote"></p>
+          </div>
+          <div class="field" data-show="color">
             <div class="flabel">Jadikan transparan</div>
             <div class="seg wide" data-opt="whiteMode">
               <button type="button" data-v="off">Tidak</button>
@@ -145,7 +166,7 @@
             </div>
             <p class="note" id="whiteNote"></p>
           </div>
-          <div class="field">
+          <div class="field" data-show="color">
             <label class="flabel" for="whiteTol">Toleransi putih <output class="mono" for="whiteTol"></output></label>
             <input type="range" id="whiteTol" data-opt="whiteTol" min="2" max="30" step="1">
           </div>

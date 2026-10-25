@@ -63,7 +63,11 @@ async function vectorize(file, o, progress) {
   g0.drawImage(bmp, 0, 0);
   const src = g0.getImageData(0, 0, sw, sh).data;
 
-  const pal = buildPalette(src, sw, sh, o);
+  // Mode siluet: 2 warna tetap (hitam pekat + putih), ambang luminans.
+  const sil = o.mode === 'silhouette';
+  const pal = sil
+    ? [{ r: 0, g: 0, b: 0, L: 0, A: 0, B: 0, n: 2 }, { r: 255, g: 255, b: 255, L: 100, A: 0, B: 0, n: 1 }]
+    : buildPalette(src, sw, sh, o);
   progress(0.06, 'palet');
 
   // Penghalusan searah garis pada resolusi sumber, lalu upscale dari hasilnya.
@@ -112,7 +116,7 @@ async function vectorize(file, o, progress) {
   // Warna putih utama (untuk bentuk latar yang disembunyikan).
   let whiteK = -1;
   pal.forEach((p, k) => { if (isWhite[k] && (whiteK < 0 || p.n > pal[whiteK].n)) whiteK = k; });
-  const mode = o.whiteMode || 'smart';
+  const mode = sil ? (o.cavity === 'transparent' ? 'all' : 'outer') : o.whiteMode || 'smart';
   if (whiteK >= 0) {
     if (mode === 'all') {
       for (let i = 0; i < N; i++) if (lab[i] !== T && isWhite[lab[i]]) lab[i] = HW;
@@ -123,6 +127,16 @@ async function vectorize(file, o, progress) {
 
   // Komponen; putih latar terkurung (mode pintar) ikut ditandai HW.
   let info = label(lab, W, H, comp, order);
+  // Siluet padat: rongga putih di dalam objek diisi warna siluet.
+  if (sil && o.cavity === 'fill') {
+    let any = false;
+    for (let c = 0; c < info.count; c++) {
+      if (info.lbl[c] !== 1) continue;
+      any = true;
+      for (let h = info.start[c], e = h + info.size[c]; h < e; h++) lab[order[h]] = 0;
+    }
+    if (any) info = label(lab, W, H, comp, order);
+  }
   if (mode === 'smart' && whiteK >= 0) {
     const removed = new Uint8Array(info.count);
     smartWhite(lab, W, comp, order, info, isWhite, removed, pal);
@@ -340,10 +354,6 @@ function assignLabels(data, W, H, s, pal, o) {
     }
   }
 
-  // Benih = piksel yang warnanya dekat palet DAN tidak berada di lereng gradien.
-  // Lereng diukur dengan selisih tengah (x-1 vs x+1, y-1 vs y+1): piksel campuran
-  // di tepi dua warna punya selisih besar, sedangkan inti garis tipis (puncak)
-  // dan area rata punya selisih kecil.
   // Upscale bilinear browser patah di tiap pusat piksel sumber → kontur 50%
   // ikut bergelombang. Blur binomial ringan menghaluskan lipatan itu tanpa
   // menggeser tepi lurus.
@@ -353,6 +363,21 @@ function assignLabels(data, W, H, s, pal, o) {
   }
 
   const lab = new Uint8Array(N);
+
+  // Siluet: ambang luminans pada gambar kerja yang sudah halus → kontur sub-piksel.
+  if (o.mode === 'silhouette') {
+    const thr = o.silThreshold ?? 128;
+    for (let i = 0, p = 0; i < N; i++, p += 4) {
+      if (data[p + 3] < 128) { lab[i] = T; continue; }
+      lab[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2] < thr ? 0 : 1;
+    }
+    return lab;
+  }
+
+  // Benih = piksel yang warnanya dekat palet DAN tidak berada di lereng gradien.
+  // Lereng diukur dengan selisih tengah (x-1 vs x+1, y-1 vs y+1): piksel campuran
+  // di tepi dua warna punya selisih besar, sedangkan inti garis tipis (puncak)
+  // dan area rata punya selisih kecil.
   const FTW = Math.max(14, 40 / s);
   const CT = FTW * 1.5;
   const tight = 4;

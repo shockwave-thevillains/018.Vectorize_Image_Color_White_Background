@@ -7,6 +7,9 @@ jadi bisa di-host gratis di GitHub Pages.
 ## Fitur
 
 - **Batch**: seret banyak gambar sekaligus (atau tempel dari clipboard). Diproses paralel.
+- **Mode Warna atau Siluet**
+  - *Warna*: palet otomatis (atau dibatasi), cocok untuk ilustrasi flat.
+  - *Siluet*: 2 warna (hitam pekat + putih) dengan ambang gelap/terang yang bisa diatur — untuk stensil, emblem, siluet. Rongga di dalam siluet bisa **Transparan**, **Isi** (siluet padat), atau **Putih**.
 - **Upscale sebelum tracing** (default 4×) agar batas warna jatuh di posisi sub-piksel.
 - **Latar putih → transparan**
   - *Luar*: hanya putih yang tersambung ke tepi gambar (dengan penutup celah garis, jadi tidak bocor ke dalam objek).

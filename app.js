@@ -2,6 +2,9 @@ import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outline
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
+  mode: 'color',
+  silThreshold: 128,
+  cavity: 'transparent',
   upscale: 4,
   colorAuto: 1,
   maxColors: 12,
@@ -19,7 +22,7 @@ const DEFAULTS = {
   start: 1,
   format: 'both',
 };
-const PROC = ['upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
+const PROC = ['mode', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
 const MAX_WORK = 4096 * 4096;
 const GAP_WIDTH = 1.5; // px output
 
@@ -43,6 +46,9 @@ let seq = 0;
 
 function procOpts() {
   return {
+    mode: S.mode,
+    silThreshold: S.silThreshold,
+    cavity: S.cavity,
     upscale: S.upscale,
     maxColors: S.colorAuto ? 0 : S.maxColors,
     colorMerge: S.colorMerge,
@@ -722,6 +728,7 @@ const LABELS = {
   minArea: (v) => `${v} px²`,
   corner: (v) => `${v}°`,
   whiteTol: (v) => `ΔE ${v}`,
+  silThreshold: (v) => `${v}`,
 };
 
 function syncControls() {
@@ -745,6 +752,12 @@ function syncControls() {
   $('#stackNote').textContent = S.stacking === 'stacked'
     ? 'Bentuk ditumpuk dari belakang ke depan — tanpa retak di bentuk bersarang, mudah diedit.'
     : 'Bentuk saling memotong tanpa tumpang tindih — cocok untuk cutting plotter dan sablon.';
+  $$('[data-show]').forEach((el) => { el.hidden = el.dataset.show !== S.mode; });
+  $('#cavityNote').textContent = {
+    transparent: 'Rongga di dalam siluet menjadi transparan (bisa dikembalikan dengan klik).',
+    fill: 'Siluet padat: rongga di dalam objek diisi warna siluet.',
+    white: 'Rongga di dalam objek tetap putih.',
+  }[S.cavity] || '';
   $('#whiteNote').textContent = {
     off: 'Latar putih dipertahankan.',
     outer: 'Hanya putih yang tersambung ke tepi gambar.',
