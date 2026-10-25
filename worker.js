@@ -139,7 +139,7 @@ async function vectorize(file, o, progress) {
   }
   if (mode === 'smart' && whiteK >= 0) {
     const removed = new Uint8Array(info.count);
-    smartWhite(lab, W, comp, order, info, isWhite, removed, pal);
+    smartWhite(lab, W, comp, order, info, isWhite, removed, pal, s);
     let any = false;
     for (let c = 0; c < info.count; c++) {
       if (!removed[c]) continue;
@@ -781,7 +781,7 @@ function floodBorder(lab, W, H, isWhite, queue, r) {
 // objek (badan, wajah) hanya bersentuhan dengan warna garis; putih latar yang
 // terkurung (antara kaki, layar, rangka kursi) bersentuhan langsung dengan
 // warna latar lain (blob, bayangan, garis berwarna terang) atau area transparan.
-function smartWhite(lab, W, comp, order, info, isWhite, removed, pal) {
+function smartWhite(lab, W, comp, order, info, isWhite, removed, pal, s) {
   const N = lab.length;
   // Warna garis = warna non-putih yang paling banyak berbatasan dengan putih.
   const contact = new Float64Array(256);
@@ -837,6 +837,57 @@ function smartWhite(lab, W, comp, order, info, isWhite, removed, pal) {
       if (i < N - W) see(i + W);
     }
     if (tot && bg / tot >= 0.06) removed[c] = 1;
+  }
+
+  // Ruang kosong: putih yang dikurung beberapa OBJEK terpisah (kaki & dudukan
+  // bangku, rak pot). Dilihat apa yang ada di seberang garis outline: objek
+  // ber-outline (≥ setengah batasnya warna garis) atau latar. Putih milik objek
+  // (badan, wajah, kartu) di seberang garisnya berupa latar atau hanya satu objek.
+  const tot = new Float64Array(n), olc = new Float64Array(n);
+  for (let i = 0; i < N; i++) {
+    const c = comp[i], x = i % W;
+    const see = (q) => { const cq = comp[q]; if (cq === c) return; tot[c]++; if (lab[q] === outline) olc[c]++; };
+    if (x > 0) see(i - 1);
+    if (x < W - 1) see(i + 1);
+    if (i >= W) see(i - W);
+    if (i < N - W) see(i + W);
+  }
+  const isObj = (c) => {
+    const l = info.lbl[c];
+    return l !== T && l !== HW && l !== outline && !isWhite[l] && tot[c] > 0 && olc[c] / tot[c] >= 0.8;
+  };
+  const maxStep = Math.max(4, Math.round(4 * s));
+  const DXY = [1, -1, W, -W];
+  for (let c = 0; c < n; c++) {
+    const l = info.lbl[c];
+    if (removed[c] || l === T || !isWhite[l] || info.border[c]) continue;
+    let objHits = 0, bgHits = 0, elemHits = 0;
+    const objs = new Set();
+    for (let h = info.start[c], e = h + info.size[c]; h < e; h++) {
+      const i = order[h], x = i % W;
+      for (let d = 0; d < 4; d++) {
+        if ((d === 0 && x === W - 1) || (d === 1 && x === 0)) continue;
+        let j = i + DXY[d];
+        if (j < 0 || j >= N || lab[j] !== outline) continue;
+        // Menyeberangi garis.
+        let k = 0;
+        while (k < maxStep && j >= 0 && j < N && lab[j] === outline) {
+          const jx = j % W;
+          if ((d === 0 && jx === W - 1) || (d === 1 && jx === 0)) { j = -1; break; }
+          j += DXY[d]; k++;
+        }
+        if (j < 0 || j >= N) { bgHits++; continue; } // keluar gambar = latar
+        if (lab[j] === outline) continue; // area gelap tebal: netral
+        const q = comp[j], lq = lab[j];
+        if (lq === T || lq === HW) bgHits++;
+        else if (isWhite[lq]) continue; // putih lain di seberang: netral
+        else if (isObj(q)) { objHits++; objs.add(q); }
+        else { bgHits++; elemHits++; } // elemen latar berwarna (blob, bayangan)
+      }
+    }
+    const all = objHits + bgHits;
+    // Putih di depan elemen latar (mis. kepala robot di depan blob) = milik objek.
+    if (all > 0 && objs.size >= 2 && objHits / all >= 0.6 && elemHits / all < 0.05) removed[c] = 1;
   }
 }
 
