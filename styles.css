@@ -87,6 +87,7 @@ svg { display: block; }
 .btn.ghost { background: transparent; }
 .btn.ghost:hover:not(:disabled) { background: var(--sunk); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); height: 44px; width: 100%; font-size: 15px; }
+.btn.primary.small { height: 32px; width: auto; font-size: 13px; padding: 0 14px; }
 .btn.primary:hover:not(:disabled) { filter: brightness(0.95); }
 .btn.dark { background: var(--ink); border-color: var(--ink); color: var(--paper); height: 40px; width: 100%; }
 .btn.dark:hover:not(:disabled) { filter: brightness(1.15); }

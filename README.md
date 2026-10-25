@@ -47,6 +47,12 @@ python3 -m http.server 8000
 
 (Membuka `index.html` langsung via `file://` tidak bisa karena Web Worker dan ES module.)
 
+## Versi file (cache)
+
+`index.html` dan `app.js` memuat file lain dengan `?v=<versi>` agar browser tidak memakai
+JavaScript lama dari cache GitHub Pages. Saat mengubah file, perbarui angka versinya
+(cari `?v=`) di `index.html` dan `app.js`.
+
 ## Deploy ke GitHub Pages
 
 1. Repo → **Settings → Pages**.
