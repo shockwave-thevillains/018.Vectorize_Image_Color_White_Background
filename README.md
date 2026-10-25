@@ -12,7 +12,7 @@ jadi bisa di-host gratis di GitHub Pages.
   - *Luar*: hanya putih yang tersambung ke tepi gambar (dengan penutup celah garis, jadi tidak bocor ke dalam objek).
   - *Pintar* (default): putih luar + putih terkurung yang termasuk latar (antara kaki, rangka kursi, dsb.). Putih milik objek tetap.
   - *Semua*: semua area putih.
-  - Klik area di pratinjau untuk menghapus/mengembalikan region tertentu.
+  - Klik bentuk mana pun di pratinjau untuk menghapus/mengembalikannya, **langsung tanpa proses ulang** (bentuk disorot saat kursor di atasnya). Urungkan/ulangi: Ctrl+Z / Ctrl+Shift+Z.
 - **Ukuran output microstock**: 15 / 20 / 25 / 30 MP, kustom (≥15 MP), atau asli. Artboard dan koordinat kurva diskalakan.
 - **Kode nama file**: `[kode]_[urutan]_[nama_awal]`, mis. `011_1_600_01_stencil_voids_emblem.svg`.
 - **Format unduhan**: SVG + EPS (`SVG/` dan `EPS/` dalam satu ZIP), hanya SVG, atau hanya EPS.
@@ -22,12 +22,13 @@ jadi bisa di-host gratis di GitHub Pages.
 
 ## Cara kerja tracing
 
-1. **Palet** dibangun dari piksel "rata". Piksel transisi/antialias diabaikan, lalu varian minor (mis. tepi garis yang lebih gelap karena kompresi) dilebur.
-2. **Upscale** dengan interpolasi halus.
-3. **Benih + region growing**: piksel yang jelas cocok dengan palet dan tidak berada di lereng gradien menjadi benih. Piksel transisi diberikan ke warna tetangga terdekat, sehingga batas jatuh di titik 50%.
-4. **Pembersihan**: bintik kecil dilebur ke tetangga yang warnanya paling mirip.
-5. **Tracing pada kisi sudut piksel**: batas antar dua region dipecah menjadi rantai di titik pertemuan ≥3 region. Tiap rantai di-fit **sekali** dan dipakai kedua sisinya, jadi tidak ada celah atau tumpang tindih.
-6. **Fitting**: deteksi sudut, garis lurus, Bézier kubik (Schneider), dan elips utuh.
+1. **Penghalusan searah garis**: arah tiap tepi dihitung (tensor struktur), lalu warna dirata-ratakan sepanjang garis — getaran tepi akibat kompresi hilang tanpa menipiskan garis.
+2. **Palet** dibangun dari piksel "rata". Piksel transisi/antialias diabaikan, lalu varian minor (mis. tepi garis yang lebih gelap karena kompresi) dilebur.
+3. **Upscale** dengan interpolasi halus.
+4. **Benih + region growing**: piksel yang jelas cocok dengan palet dan tidak berada di lereng gradien menjadi benih. Piksel transisi diberikan ke warna tetangga terdekat, sehingga batas jatuh di titik 50%.
+5. **Pembersihan**: bintik kecil dilebur ke tetangga yang warnanya paling mirip.
+6. **Tracing pada kisi sudut piksel**: batas antar dua region dipecah menjadi rantai di titik pertemuan ≥3 region. Tiap rantai di-fit **sekali** dan dipakai kedua sisinya, jadi tidak ada celah atau tumpang tindih.
+7. **Fitting**: deteksi sudut, garis lurus, Bézier kubik (Schneider), dan elips utuh.
 
 ## Menjalankan lokal
 

@@ -49,6 +49,7 @@
           <div class="layer full" id="vOrigWrap"><img class="orig" id="vOrig" alt="" draggable="false"></div>
           <svg class="layer vec" id="vVec" xmlns="http://www.w3.org/2000/svg"></svg>
           <svg class="layer out" id="vOut" xmlns="http://www.w3.org/2000/svg"></svg>
+          <svg class="layer hi" id="vHi" xmlns="http://www.w3.org/2000/svg"></svg>
           <div class="layer lens" id="vLens" hidden>
             <img class="orig" id="vLensImg" alt="" draggable="false">
             <svg class="out" id="vLensOut" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -69,8 +70,12 @@
         <div class="palette" id="palette" hidden>
           <span class="plabel mono">Palet</span>
           <div class="swatches" id="swatches"></div>
-          <span class="phint">Klik area di pratinjau untuk menghapus / mengembalikan</span>
-          <button type="button" class="btn ghost small" id="resetClicks" hidden>Reset klik</button>
+          <span class="phint">Klik bentuk di pratinjau untuk menghapus / mengembalikan</span>
+          <span class="edits">
+            <button type="button" class="icon" id="undoClick" title="Urungkan (Ctrl+Z)" disabled><svg viewBox="0 0 16 16"><path d="M6 4 2.5 7.5 6 11M3 7.5h6.5a3.5 3.5 0 0 1 0 7H8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></button>
+            <button type="button" class="icon" id="redoClick" title="Ulangi (Ctrl+Shift+Z)" disabled><svg viewBox="0 0 16 16"><path d="M10 4l3.5 3.5L10 11M13 7.5H6.5a3.5 3.5 0 0 0 0 7H8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></button>
+            <button type="button" class="btn ghost small" id="resetClicks" disabled>Reset</button>
+          </span>
         </div>
       </div>
 

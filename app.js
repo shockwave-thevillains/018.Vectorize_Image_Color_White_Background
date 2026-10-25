@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, hex, makeZip, saveBlob } from './export.js';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -41,7 +41,7 @@ const items = [];
 let selId = null;
 let seq = 0;
 
-function procOpts(it) {
+function procOpts() {
   return {
     upscale: S.upscale,
     maxColors: S.colorAuto ? 0 : S.maxColors,
@@ -52,11 +52,9 @@ function procOpts(it) {
     whiteMode: S.whiteMode,
     whiteTol: S.whiteTol,
     maxWorkPixels: MAX_WORK,
-    hide: [...it.hide].sort((a, b) => a - b),
-    toggles: it.toggles,
   };
 }
-const keyOf = (it) => JSON.stringify(procOpts(it));
+const keyOf = (it) => JSON.stringify(procOpts());
 const isCurrent = (it) => it.result && it.key === keyOf(it);
 
 function statusOf(it) {
@@ -84,10 +82,12 @@ async function addFiles(fileList) {
       progress: 0,
       error: null,
       errKey: null,
-      hide: new Set(),
-      toggles: [],
+      hide: new Set(), // indeks palet yang disembunyikan
+      toggles: [], // titik klik [x, y] (koordinat sumber); tiap klik membalik region di titik itu
+      redo: [],
       recolor: {},
       outline: null,
+      paths: new Map(),
     };
     items.push(it);
     createRow(it);
@@ -156,7 +156,7 @@ function schedule() {
     it.inflight = key;
     it.progress = 0;
     wk.job = { id: it.id, key };
-    wk.w.postMessage({ id: it.id, file: it.file, opts: procOpts(it) });
+    wk.w.postMessage({ id: it.id, file: it.file, opts: procOpts() });
     updateRow(it);
   }
   refreshStatus();
@@ -191,6 +191,7 @@ function onWorker(wk, msg) {
     it.result = msg.result;
     it.key = job.key;
     it.outline = null;
+    it.paths = new Map();
     if (prev) remapOverrides(it, prev.palette, msg.result.palette);
     updateRow(it);
     if (it.id === selId) { renderViewer(); refreshSize(); }
@@ -217,6 +218,31 @@ function remapOverrides(it, oldPal, newPal) {
   const hid = new Set();
   for (const k of it.hide) { const j = find(oldPal[k]); if (j >= 0) hid.add(j); }
   it.hide = hid;
+}
+
+// ---------------------------------------------------------------- region tersembunyi
+// Klik & sembunyikan warna bekerja langsung pada vektor yang sudah ada (instan).
+function regionAt(res, sx, sy) {
+  const q = res.rmapW / res.srcW;
+  const x = Math.max(0, Math.min(res.rmapW - 1, Math.floor(sx * q)));
+  const y = Math.max(0, Math.min(res.rmapH - 1, Math.floor(sy * q)));
+  return res.rmap[y * res.rmapW + x];
+}
+function hiddenFor(it) {
+  const res = it.result;
+  const h = defaultHidden(res);
+  res.regions.forEach((r, i) => { if (it.hide.has(r.k)) h[i] = 1; });
+  for (const [sx, sy] of it.toggles) {
+    const i = regionAt(res, sx, sy);
+    if (i >= 0) h[i] ^= 1;
+  }
+  return h;
+}
+const visKey = (it) => `${it.id}:${it.key}:${it.toggles.length}:${[...it.hide].join(',')}`;
+function editsChanged(it) {
+  it.outline = null;
+  updateRow(it);
+  if (it.id === selId) { renderViewer(); hoverRegion = -2; updateHover(); }
 }
 
 let waiters = [];
@@ -394,7 +420,7 @@ function applyView() {
     }
   }
   const vb = `${-V.px / V.z} ${-V.py / V.z} ${sw / V.z} ${sh / V.z}`;
-  for (const s of [vVec, vOut, vLensOut]) s.setAttribute('viewBox', vb);
+  for (const s of [vVec, vOut, vLensOut, vHi]) s.setAttribute('viewBox', vb);
   $('#zoomLabel').textContent = `${Math.round(V.z * 100)}%`;
   applyMode();
 }
@@ -447,10 +473,10 @@ function groupTransform(res) {
 
 function ensureOutline(it, svg) {
   if (!it || !it.result) return;
-  if (!it.outline) it.outline = outlineMarkup(it.result);
-  if (svg.dataset.for !== `${it.id}:${it.key}`) {
+  if (!it.outline) it.outline = outlineMarkup(it.result, hiddenFor(it));
+  if (svg.dataset.for !== visKey(it)) {
     svg.innerHTML = `<g transform="${groupTransform(it.result)}">${it.outline}</g>`;
-    svg.dataset.for = `${it.id}:${it.key}`;
+    svg.dataset.for = visKey(it);
   }
 }
 
@@ -459,9 +485,10 @@ function renderViewer() {
   if (!it) return;
   if (it.result) {
     const res = it.result;
-    vVec.innerHTML = `<g transform="${groupTransform(res)}">${previewMarkup(res, { stacking: S.stacking, recolor: it.recolor })}</g>`;
+    const hidden = hiddenFor(it);
+    vVec.innerHTML = `<g transform="${groupTransform(res)}">${previewMarkup(res, { stacking: S.stacking, recolor: it.recolor, hidden })}</g>`;
     vOut.dataset.for = vLensOut.dataset.for = '';
-    const shapes = res.regions.length;
+    const shapes = hidden.reduce((n, h) => n + (h ? 0 : 1), 0);
     $('#vinfo').textContent = `${res.srcW}×${res.srcH} → proses ${res.W}×${res.H} · ${res.palette.length} warna · ${fmtInt(shapes)} bentuk · ${fmtInt(res.nodes)} segmen`;
     renderPalette(it);
   } else {
@@ -504,10 +531,7 @@ function renderPalette(it) {
       if (!a) return;
       if (a.dataset.a === 'hide') {
         if (it.hide.has(k)) it.hide.delete(k); else it.hide.add(k);
-        renderPalette(it);
-        updateRow(it);
-        schedule();
-        renderBusy();
+        editsChanged(it);
       } else if (a.dataset.a === 'reset') {
         delete it.recolor[k];
         renderViewer();
@@ -521,18 +545,31 @@ function renderPalette(it) {
     box.appendChild(el);
   });
   $('#palette').hidden = false;
-  const rc = $('#resetClicks');
-  rc.hidden = !it.toggles.length;
-  rc.textContent = `Reset klik (${it.toggles.length})`;
+  $('#undoClick').disabled = !it.toggles.length;
+  $('#redoClick').disabled = !it.redo.length;
+  $('#resetClicks').disabled = !it.toggles.length;
 }
+function undoClick() {
+  const it = selected();
+  if (!it || !it.toggles.length) return;
+  it.redo.push(it.toggles[it.toggles.length - 1]);
+  it.toggles = it.toggles.slice(0, -1);
+  editsChanged(it);
+}
+function redoClick() {
+  const it = selected();
+  if (!it || !it.redo.length) return;
+  it.toggles = [...it.toggles, it.redo.pop()];
+  editsChanged(it);
+}
+$('#undoClick').addEventListener('click', undoClick);
+$('#redoClick').addEventListener('click', redoClick);
 $('#resetClicks').addEventListener('click', () => {
   const it = selected();
   if (!it) return;
   it.toggles = [];
-  schedule();
-  renderBusy();
-  renderPalette(it);
-  updateRow(it);
+  it.redo = [];
+  editsChanged(it);
 });
 let pickRaf = 0;
 picker.addEventListener('input', () => {
@@ -563,8 +600,34 @@ stage.addEventListener('pointermove', (e) => {
     if (drag.split) V.split = Math.max(0, Math.min(1, V.mx / r.width));
     else { V.px = drag.px + (e.clientX - drag.x); V.py = drag.py + (e.clientY - drag.y); }
     applyView();
-  } else if (V.mode === 'vector' && V.lens) applyMode();
+  } else {
+    if (V.mode === 'vector' && V.lens) applyMode();
+    updateHover();
+  }
 });
+
+// Sorot bentuk di bawah kursor (seperti vectorizer.ai); klik = hapus/kembalikan.
+const vHi = $('#vHi');
+let hoverRegion = -2;
+function pointRegion() {
+  const it = selected();
+  if (!it || !it.result || !V.hover || V.mx < 0) return -1;
+  if (V.mode === 'compare' && V.mx < V.split * stage.clientWidth) return -1;
+  const sx = (V.mx - V.px) / V.z, sy = (V.my - V.py) / V.z;
+  if (sx < 0 || sy < 0 || sx >= it.result.srcW || sy >= it.result.srcH) return -1;
+  return regionAt(it.result, sx, sy);
+}
+function updateHover() {
+  const it = selected();
+  const i = drag ? -1 : pointRegion();
+  if (i === hoverRegion) return;
+  hoverRegion = i;
+  stage.classList.toggle('pick', i >= 0);
+  if (i < 0) { vHi.innerHTML = ''; return; }
+  let d = it.paths.get(i);
+  if (!d) { d = regionPath(it.result, i); it.paths.set(i, d); }
+  vHi.innerHTML = `<g transform="${groupTransform(it.result)}"><path d="${d}"/></g>`;
+}
 const endDrag = () => { drag = null; stage.classList.remove('dragging'); };
 // Klik tanpa geser = hapus/kembalikan region di titik itu (seperti koreksi latar vectorizer.ai).
 stage.addEventListener('pointerup', (e) => {
@@ -577,14 +640,13 @@ stage.addEventListener('pointerup', (e) => {
   if (V.mode === 'compare' && mx < V.split * r.width) return; // sisi "Asli"
   const sx = (mx - V.px) / V.z, sy = (my - V.py) / V.z;
   if (sx < 0 || sy < 0 || sx >= it.srcW || sy >= it.srcH) return;
+  if (regionAt(it.result, sx, sy) < 0) return;
   it.toggles = [...it.toggles, [sx, sy]];
-  schedule();
-  renderBusy();
-  renderPalette(it);
-  updateRow(it);
+  it.redo = [];
+  editsChanged(it);
 });
 stage.addEventListener('pointercancel', endDrag);
-stage.addEventListener('pointerleave', () => { V.hover = false; if (!drag) applyMode(); });
+stage.addEventListener('pointerleave', () => { V.hover = false; if (!drag) { applyMode(); updateHover(); } });
 stage.addEventListener('wheel', (e) => {
   if (!selected()) return;
   e.preventDefault();
@@ -609,7 +671,14 @@ function toolAct(act) {
 }
 $$('.tools [data-act]').forEach((b) => b.addEventListener('click', () => toolAct(b.dataset.act)));
 window.addEventListener('keydown', (e) => {
-  if (e.target.closest('input, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.closest('input, textarea')) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (e.shiftKey) redoClick(); else undoClick();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redoClick(); return; }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
   const map = { '+': 'zoomin', '=': 'zoomin', '-': 'zoomout', '0': 'fit', '1': 'one', l: 'lens', L: 'lens' };
   if (map[e.key] && selected()) { toolAct(map[e.key]); e.preventDefault(); }
   const modes = { c: 'compare', v: 'vector', o: 'outline' };
@@ -733,6 +802,7 @@ function exportOpts(it) {
     gapFill: S.gapFill,
     gapWidth: GAP_WIDTH,
     recolor: it.recolor,
+    hidden: hiddenFor(it),
   };
 }
 

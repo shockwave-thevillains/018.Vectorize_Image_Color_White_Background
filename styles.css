@@ -177,7 +177,9 @@ svg { display: block; }
 .stage:focus { outline: none; }
 .layer { position: absolute; left: 0; top: 0; }
 .layer.full { inset: 0; overflow: hidden; pointer-events: none; }
-.stage > svg.layer { width: 100%; height: 100%; overflow: visible; }
+.stage > svg.layer { width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.layer.hi path { fill: rgb(25 227 255 / 0.22); stroke: #19e3ff; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.stage.pick:not(.dragging) { cursor: pointer; }
 img.orig { position: absolute; left: 0; top: 0; transform-origin: 0 0; image-rendering: pixelated; max-width: none; pointer-events: none; }
 .layer.out path, .lens .out path { fill: none; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .stage.mode-outline .layer.vec { opacity: 0.18; }
@@ -290,6 +292,8 @@ img.orig { position: absolute; left: 0; top: 0; transform-origin: 0 0; image-ren
 .sw.off .chip { background-image: linear-gradient(135deg, transparent 45%, var(--err) 45%, var(--err) 55%, transparent 55%) !important; }
 .sw.changed { border-color: var(--accent); }
 .phint { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.edits { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.edits .icon:disabled { opacity: 0.35; cursor: default; background: none; }
 kbd { font: 600 11px var(--mono); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 4px; }
 
 /* ---------------------------------------------------------------- antrean */

@@ -90,31 +90,57 @@ function epsSink(kx, ky, H) {
   };
 }
 
-// Daftar bentuk siap gambar, sesuai mode lapisan dan warna yang diubah.
+// Region yang tersembunyi: putih latar (default) XOR diklik, atau warnanya disembunyikan.
+// opt.hidden: Uint8Array per region (1 = tersembunyi). Tanpa opt.hidden → default.
+export function defaultHidden(res) {
+  return Uint8Array.from(res.regions, (r) => (r.hid ? 1 : 0));
+}
+const hiddenOf = (res, opt) => opt.hidden || defaultHidden(res);
+
+// Daftar bentuk siap gambar, sesuai mode lapisan, region tersembunyi, dan warna.
 function shapes(res, opt) {
   const pal = res.palette.map((c, k) => (opt.recolor && opt.recolor[k]) || c);
+  const hidden = hiddenOf(res, opt);
   const list = [];
   if (opt.stacking === 'cutout') {
     // Satu compound path per warna (region tidak saling tumpang tindih).
     const byColor = new Map();
-    for (const r of res.regions) {
-      if (!byColor.has(r.k)) byColor.set(r.k, []);
-      for (const s of r.subs) byColor.get(r.k).push(s);
-    }
-    for (const [k, subs] of byColor) list.push({ color: pal[k], subs, regions: res.regions.filter((r) => r.k === k) });
+    res.regions.forEach((r, i) => {
+      if (hidden[i]) return;
+      if (!byColor.has(r.k)) byColor.set(r.k, { subs: [], regions: [] });
+      const g = byColor.get(r.k);
+      g.subs.push(...r.subs);
+      g.regions.push(i);
+    });
+    for (const [k, g] of byColor) list.push({ color: pal[k], subs: g.subs, regions: g.regions });
   } else {
-    for (const r of res.regions) list.push({ color: pal[r.k], subs: r.subs.filter((s) => s.outer || !s.fill), regions: [r] });
+    // Tumpuk: lubang diisi kecuali berbatasan dengan region tersembunyi/transparan.
+    res.regions.forEach((r, i) => {
+      if (hidden[i]) return;
+      const subs = r.subs.filter((s) => s.outer || !s.fill || touchesHidden(res, s, i, hidden));
+      list.push({ color: pal[r.k], subs, regions: [i] });
+    });
   }
   return list;
 }
 
-// Garis pengisi celah: hanya batas antar dua bentuk (bukan tepi luar).
-function gapStrokes(res, region, sinkFactory) {
+function touchesHidden(res, sub, i, hidden) {
+  for (let n = 0; n < sub.refs.length; n++) {
+    const ch = res.chains[sub.refs[n] >> 1];
+    const other = ch.a === i ? ch.b : ch.a;
+    if (other < 0 || hidden[other]) return true;
+  }
+  return false;
+}
+
+// Garis pengisi celah: hanya batas antar dua bentuk yang sama-sama tampil.
+function gapStrokes(res, i, hidden, sinkFactory) {
   const segs = [];
-  for (const s of region.subs) {
-    for (let i = 0; i < s.refs.length; i++) {
-      const ref = s.refs[i];
-      if (!res.chains[ref >> 1].inner) continue;
+  for (const s of res.regions[i].subs) {
+    for (let n = 0; n < s.refs.length; n++) {
+      const ref = s.refs[n];
+      const ch = res.chains[ref >> 1];
+      if (ch.a < 0 || ch.b < 0 || hidden[ch.a] || hidden[ch.b]) continue;
       const sink = sinkFactory();
       walk([ref], res.chains, sink, false);
       segs.push(sink);
@@ -127,6 +153,7 @@ export function buildSVG(res, opt) {
   const { w: OW, h: OH } = opt.size;
   const kx = OW / res.W, ky = OH / res.H;
   const items = shapes(res, opt);
+  const hidden = hiddenOf(res, opt);
   const parts = [];
   parts.push('<?xml version="1.0" encoding="UTF-8"?>');
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="${OW}" height="${OH}" viewBox="0 0 ${OW} ${OH}">`);
@@ -135,7 +162,7 @@ export function buildSVG(res, opt) {
     parts.push(`<g fill="none" stroke-width="${gw}" stroke-linejoin="round" stroke-linecap="round">`);
     for (const it of items) {
       const d = [];
-      for (const r of it.regions) for (const sk of gapStrokes(res, r, () => svgSink(kx, ky))) d.push(sk.text());
+      for (const i of it.regions) for (const sk of gapStrokes(res, i, hidden, () => svgSink(kx, ky))) d.push(sk.text());
       if (d.length) parts.push(`<path stroke="${hex(it.color)}" d="${d.join('')}"/>`);
     }
     parts.push('</g>');
@@ -154,6 +181,7 @@ export function buildEPS(res, opt, title) {
   const { w: OW, h: OH } = opt.size;
   const kx = OW / res.W, ky = OH / res.H;
   const items = shapes(res, opt);
+  const hidden = hiddenOf(res, opt);
   const L = [];
   L.push('%!PS-Adobe-3.0 EPSF-3.0');
   L.push('%%Creator: Vektor');
@@ -176,7 +204,7 @@ export function buildEPS(res, opt, title) {
     L.push(`${num(opt.gapWidth || 1)} setlinewidth 1 setlinejoin 1 setlinecap`);
     for (const it of items) {
       const sinks = [];
-      for (const r of it.regions) sinks.push(...gapStrokes(res, r, () => epsSink(kx, ky, OH)));
+      for (const i of it.regions) sinks.push(...gapStrokes(res, i, hidden, () => epsSink(kx, ky, OH)));
       if (!sinks.length) continue;
       L.push(col(it.color));
       L.push('newpath');
@@ -212,10 +240,18 @@ export function previewMarkup(res, opt) {
   return parts.join('');
 }
 
-export function outlineMarkup(res) {
+export function outlineMarkup(res, hidden) {
+  const h = hidden || defaultHidden(res);
   const sk = svgSink(1, 1);
-  for (const r of res.regions) for (const s of r.subs) walk(s.refs, res.chains, sk, true);
+  res.regions.forEach((r, i) => { if (!h[i]) for (const s of r.subs) walk(s.refs, res.chains, sk, true); });
   return `<path d="${sk.text()}"/>`;
+}
+
+// Path satu region (untuk sorotan saat kursor di atasnya).
+export function regionPath(res, i) {
+  const sk = svgSink(1, 1);
+  for (const s of res.regions[i].subs) walk(s.refs, res.chains, sk, true);
+  return sk.text();
 }
 
 export { hex };

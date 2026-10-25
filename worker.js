@@ -17,6 +17,7 @@
 
 const T = 255; // label transparan
 const U = 254; // belum ditetapkan
+const HW = 253; // putih latar: tetap ditrace, tersembunyi secara default
 
 // ---------------------------------------------------------------- warna
 const LIN = new Float32Array(256);
@@ -45,6 +46,7 @@ self.onmessage = async (e) => {
     const result = await vectorize(file, opts, progress);
     const transfer = [];
     for (const ch of result.chains) transfer.push(ch.p.buffer, ch.c.buffer);
+    transfer.push(result.rmap.buffer);
     self.postMessage({ id, type: 'done', result }, transfer);
   } catch (err) {
     self.postMessage({ id, type: 'error', message: String((err && err.message) || err) });
@@ -62,7 +64,14 @@ async function vectorize(file, o, progress) {
   const src = g0.getImageData(0, 0, sw, sh).data;
 
   const pal = buildPalette(src, sw, sh, o);
-  progress(0.08, 'palet');
+  progress(0.06, 'palet');
+
+  // Penghalusan searah garis pada resolusi sumber, lalu upscale dari hasilnya.
+  if (o.flow !== false) {
+    flowSmooth(src, sw, sh, Math.max(2, Math.round(1.5 + 2.5 * o.smooth)));
+    g0.putImageData(new ImageData(src, sw, sh), 0, 0);
+  }
+  progress(0.1, 'arah garis');
 
   // Upscale — dibatasi total piksel kerja agar memori aman.
   let s = Math.min(o.upscale, Math.sqrt(o.maxWorkPixels / (sw * sh)));
@@ -77,7 +86,7 @@ async function vectorize(file, o, progress) {
     const g1 = c1.getContext('2d', { willReadFrequently: true });
     g1.imageSmoothingEnabled = true;
     g1.imageSmoothingQuality = 'high';
-    g1.drawImage(bmp, 0, 0, W, H);
+    g1.drawImage(c0, 0, 0, W, H);
     data = g1.getImageData(0, 0, W, H).data;
   }
   bmp.close();
@@ -86,13 +95,6 @@ async function vectorize(file, o, progress) {
   const N = W * H;
   const lab = assignLabels(data, W, H, s, pal, o);
   progress(0.35, 'label');
-
-  // Warna yang disembunyikan pengguna → transparan.
-  if (o.hide && o.hide.length) {
-    const hid = new Uint8Array(256);
-    for (const k of o.hide) hid[k] = 1;
-    for (let i = 0; i < N; i++) if (hid[lab[i]]) lab[i] = T;
-  }
 
   const order = new Int32Array(N);
   const comp = new Int32Array(N);
@@ -107,33 +109,46 @@ async function vectorize(file, o, progress) {
     if (d <= o.whiteTol) isWhite[k] = 1;
   });
   isWhite[T] = 1;
+  // Warna putih utama (untuk bentuk latar yang disembunyikan).
+  let whiteK = -1;
+  pal.forEach((p, k) => { if (isWhite[k] && (whiteK < 0 || p.n > pal[whiteK].n)) whiteK = k; });
   const mode = o.whiteMode || 'smart';
-  if (mode === 'all') {
-    for (let i = 0; i < N; i++) if (isWhite[lab[i]]) lab[i] = T;
-  } else if (mode !== 'off') {
-    floodBorder(lab, W, H, isWhite, order, Math.max(1, Math.round((o.gapClose ?? 1.5) * s)));
+  if (whiteK >= 0) {
+    if (mode === 'all') {
+      for (let i = 0; i < N; i++) if (lab[i] !== T && isWhite[lab[i]]) lab[i] = HW;
+    } else if (mode !== 'off') {
+      floodBorder(lab, W, H, isWhite, order, Math.max(1, Math.round((o.gapClose ?? 1.5) * s)));
+    }
   }
 
-  // Komponen; tentukan region yang dihapus (putih latar terkurung + klik manual).
+  // Komponen; putih latar terkurung (mode pintar) ikut ditandai HW.
   let info = label(lab, W, H, comp, order);
-  const removed = new Uint8Array(info.count);
-  if (mode === 'smart') smartWhite(lab, W, comp, order, info, isWhite, removed, pal);
-  for (const [px, py] of o.toggles || []) {
-    const x = Math.max(0, Math.min(W - 1, Math.floor(px * s)));
-    const y = Math.max(0, Math.min(H - 1, Math.floor(py * s)));
-    const c = comp[y * W + x];
-    if (info.lbl[c] !== T) removed[c] ^= 1;
+  if (mode === 'smart' && whiteK >= 0) {
+    const removed = new Uint8Array(info.count);
+    smartWhite(lab, W, comp, order, info, isWhite, removed, pal);
+    let any = false;
+    for (let c = 0; c < info.count; c++) {
+      if (!removed[c]) continue;
+      any = true;
+      for (let h = info.start[c], e = h + info.size[c]; h < e; h++) lab[order[h]] = HW;
+    }
+    if (any) info = label(lab, W, H, comp, order);
   }
-  let anyRemoved = false;
-  for (let c = 0; c < info.count; c++) {
-    if (!removed[c]) continue;
-    anyRemoved = true;
-    for (let h = info.start[c], e = h + info.size[c]; h < e; h++) lab[order[h]] = T;
-  }
-  if (anyRemoved) info = label(lab, W, H, comp, order);
   progress(0.55, 'region');
 
-  const out = traceAll(lab, comp, info, W, H, s, o, (p) => progress(0.55 + p * 0.43, 'kurva'));
+  const out = traceAll(lab, comp, info, W, H, s, o, whiteK, (p) => progress(0.55 + p * 0.43, 'kurva'));
+
+  // Peta region beresolusi sumber (dikecilkan bila besar) untuk klik & sorot instan.
+  const q = Math.min(1, Math.sqrt(2e6 / (sw * sh)));
+  const mw = Math.max(1, Math.round(sw * q)), mh = Math.max(1, Math.round(sh * q));
+  const rmap = new Int32Array(mw * mh);
+  for (let y = 0; y < mh; y++) {
+    const wy = Math.min(H - 1, Math.floor(((y + 0.5) / q) * s));
+    for (let x = 0; x < mw; x++) {
+      const wx = Math.min(W - 1, Math.floor(((x + 0.5) / q) * s));
+      rmap[y * mw + x] = out.compToReg[comp[wy * W + wx]];
+    }
+  }
 
   return {
     srcW: sw,
@@ -146,6 +161,9 @@ async function vectorize(file, o, progress) {
     chains: out.chains,
     regions: out.regions,
     nodes: out.nodes,
+    rmap,
+    rmapW: mw,
+    rmapH: mh,
   };
 }
 
@@ -434,6 +452,106 @@ function blurPass(data, W, H) {
   }
 }
 
+// Penghalusan searah garis (line integral convolution mengikuti arah tepi dari
+// tensor struktur). Getaran tepi akibat kompresi diratakan SEPANJANG garis, jadi
+// kedua sisi garis outline ikut rata dan tebalnya seragam; tidak ada blur yang
+// menyilang garis. Di sudut/pertemuan warna arahnya tidak koheren → dibiarkan.
+function flowSmooth(px, w, h, R) {
+  const N = w * h, W4 = w * 4;
+  const E = new Float32Array(N), F = new Float32Array(N), G = new Float32Array(N);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x, p = i * 4;
+      let e = 0, f = 0, g = 0;
+      for (let c = 0; c < 3; c++) {
+        const gx = (px[p + 4 + c] - px[p - 4 + c]) * 0.5;
+        const gy = (px[p + W4 + c] - px[p - W4 + c]) * 0.5;
+        e += gx * gx; f += gx * gy; g += gy * gy;
+      }
+      E[i] = e; F[i] = f; G[i] = g;
+    }
+  }
+  for (const A of [E, F, G]) { boxBlur(A, w, h, 2); boxBlur(A, w, h, 1); }
+  const TX = new Float32Array(N), TY = new Float32Array(N), WT = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const e = E[i], f = F[i], g = G[i], tr = e + g;
+    if (tr < 300) continue;
+    const disc = Math.sqrt((e - g) * (e - g) + 4 * f * f);
+    const l1 = (tr + disc) / 2, l2 = (tr - disc) / 2;
+    const coh = (l1 - l2) / (l1 + l2 + 1e-9);
+    if (coh < 0.5) continue;
+    let tx = -f, ty = l1 - g;
+    const ux = l1 - e, uy = -f;
+    if (ux * ux + uy * uy > tx * tx + ty * ty) { tx = ux; ty = uy; }
+    const L = Math.hypot(tx, ty);
+    if (L < 1e-9) continue;
+    TX[i] = tx / L; TY[i] = ty / L;
+    WT[i] = Math.min(1, ((coh - 0.5) / 0.4) ** 2);
+  }
+  const out = new Uint8ClampedArray(px);
+  const sig2 = 2 * (R / 1.6) ** 2;
+  const acc = new Float64Array(3);
+  const sample = (x, y, wk) => {
+    const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+    const p00 = (y0 * w + x0) * 4, p10 = p00 + 4, p01 = p00 + W4, p11 = p01 + 4;
+    const a = (1 - fx) * (1 - fy), b = fx * (1 - fy), c = (1 - fx) * fy, d = fx * fy;
+    for (let ch = 0; ch < 3; ch++) acc[ch] += wk * (a * px[p00 + ch] + b * px[p10 + ch] + c * px[p01 + ch] + d * px[p11 + ch]);
+  };
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      const wt = WT[i];
+      if (!wt) continue;
+      const p = i * 4;
+      acc[0] = px[p]; acc[1] = px[p + 1]; acc[2] = px[p + 2];
+      let wsum = 1;
+      for (let dir = -1; dir <= 1; dir += 2) {
+        let vx = dir * TX[i], vy = dir * TY[i], sx = x, sy = y;
+        for (let k = 1; k <= R; k++) {
+          sx += vx; sy += vy;
+          if (sx < 0 || sy < 0 || sx >= w - 1 || sy >= h - 1) break;
+          const j = Math.round(sy) * w + Math.round(sx);
+          let tx = TX[j], ty = TY[j];
+          if (tx || ty) {
+            if (tx * vx + ty * vy < 0) { tx = -tx; ty = -ty; }
+            vx = tx; vy = ty;
+          }
+          const wk = Math.exp(-(k * k) / sig2);
+          sample(sx, sy, wk);
+          wsum += wk;
+        }
+      }
+      for (let ch = 0; ch < 3; ch++) out[p + ch] = px[p + ch] + wt * (acc[ch] / wsum - px[p + ch]);
+    }
+  }
+  px.set(out);
+}
+
+// Box blur terpisah (radius r) pada larik float, di tempat.
+function boxBlur(A, w, h, r) {
+  const n = 2 * r + 1;
+  const line = new Float32Array(Math.max(w, h));
+  for (let y = 0; y < h; y++) {
+    const o = y * w;
+    for (let x = 0; x < w; x++) line[x] = A[o + x];
+    let s = 0;
+    for (let k = -r; k <= r; k++) s += line[Math.min(w - 1, Math.max(0, k))];
+    for (let x = 0; x < w; x++) {
+      A[o + x] = s / n;
+      s += line[Math.min(w - 1, x + r + 1)] - line[Math.max(0, x - r)];
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y < h; y++) line[y] = A[y * w + x];
+    let s = 0;
+    for (let k = -r; k <= r; k++) s += line[Math.min(h - 1, Math.max(0, k))];
+    for (let y = 0; y < h; y++) {
+      A[y * w + x] = s / n;
+      s += line[Math.min(h - 1, y + r + 1)] - line[Math.max(0, y - r)];
+    }
+  }
+}
+
 // ---------------------------------------------------------------- komponen
 // Pelabelan komponen 4-tetangga. `order` dipakai sebagai antrean BFS sekaligus
 // daftar piksel per komponen.
@@ -568,7 +686,7 @@ function floodBorder(lab, W, H, isWhite, queue, r) {
     }
     from = to;
   }
-  for (let i = 0; i < N; i++) if (seen[i]) lab[i] = T;
+  for (let i = 0; i < N; i++) if (seen[i] && lab[i] !== T) lab[i] = HW;
 }
 
 // Putih terkurung yang termasuk latar. Pada ilustrasi ber-outline, putih milik
@@ -581,8 +699,8 @@ function smartWhite(lab, W, comp, order, info, isWhite, removed, pal) {
   const contact = new Float64Array(256);
   const note = (a, b) => {
     const wa = isWhite[a] && a !== T, wb = isWhite[b] && b !== T;
-    if (wa && !wb && b !== T) contact[b]++;
-    else if (wb && !wa && a !== T) contact[a]++;
+    if (wa && !wb && b !== T && b !== HW) contact[b]++;
+    else if (wb && !wa && a !== T && a !== HW) contact[a]++;
   };
   for (let i = 0; i < N; i++) {
     const x = i % W;
@@ -596,8 +714,9 @@ function smartWhite(lab, W, comp, order, info, isWhite, removed, pal) {
   const ol = pal[outline];
   const bgCol = new Uint8Array(256);
   bgCol[T] = 1;
+  bgCol[HW] = 1;
   pal.forEach((p, k) => {
-    if (isWhite[k] || k === outline) return;
+    if (k >= pal.length || isWhite[k] || k === outline) return;
     if (p.L >= 70 && Math.hypot(p.L - ol.L, p.A - ol.A, p.B - ol.B) > 30) bgCol[k] = 1;
   });
   // Kotak batas tiap komponen: bentuk yang seluruhnya berada di dalam area putih
@@ -636,7 +755,7 @@ function smartWhite(lab, W, comp, order, info, isWhite, removed, pal) {
 // ---------------------------------------------------------------- tracing
 const DX = [1, 0, -1, 0], DY = [0, 1, 0, -1];
 
-function traceAll(lab, comp, info, W, H, s, o, progress) {
+function traceAll(lab, comp, info, W, H, s, o, whiteK, progress) {
   const W1 = W + 1, NH = W * (H + 1);
   const vis = new Uint8Array(NH + W1 * H);
   const emit = new Uint8Array(info.count);
@@ -705,14 +824,15 @@ function traceAll(lab, comp, info, W, H, s, o, progress) {
   const map = new Map();
   let nodes = 0;
   // Rantai dikumpulkan dulu (raw), di-fit setelah titik pertemuan dirapikan.
-  const addChain = (raw, inner) => {
-    chains.push({ raw, inner });
+  // Rantai dikumpulkan dulu (raw), di-fit setelah titik pertemuan dirapikan.
+  // a = komponen di kiri (pemilik siklus), b = komponen di kanan (-1: luar/transparan).
+  const addChain = (raw, a, b) => {
+    chains.push({ raw, a, b });
     return chains.length - 1;
   };
-  const innerOf = (va, vb) => {
-    const d = dirOf(va, vb);
-    const r = rightC(va % W1, (va / W1) | 0, d);
-    return r >= 0 && emit[r] === 1;
+  const rightOf = (va, vb) => {
+    const r = rightC(va % W1, (va / W1) | 0, dirOf(va, vb));
+    return r >= 0 && emit[r] === 1 ? r : -1;
   };
 
   // Titik sampel komponen transparan yang tidak menyentuh tepi (untuk mode tumpuk).
@@ -757,7 +877,7 @@ function traceAll(lab, comp, info, W, H, s, o, progress) {
         const e = map.get(key);
         if (e) refs.push(e.idx * 2 + (e.next === nxt ? 0 : 1));
         else {
-          const idx = addChain({ closed: V }, innerOf(V[0], V[1 % n]));
+          const idx = addChain({ closed: V }, c, rightOf(V[0], V[1 % n]));
           map.set(key, { idx, next: nxt });
           refs.push(idx * 2);
         }
@@ -776,7 +896,7 @@ function traceAll(lab, comp, info, W, H, s, o, progress) {
           const e = map.get(key);
           if (e) refs.push(e.idx * 2 + (e.start === seq[0] && e.first === k0 ? 0 : 1));
           else {
-            const idx = addChain({ open: seq }, innerOf(seq[0], seq[1]));
+            const idx = addChain({ open: seq }, c, rightOf(seq[0], seq[1]));
             map.set(key, { idx, start: seq[0], first: k0 });
             refs.push(idx * 2);
           }
@@ -788,7 +908,8 @@ function traceAll(lab, comp, info, W, H, s, o, progress) {
       if (!outer) fill = !containsAny(V, W1, tPts);
       subs.push({ refs: Int32Array.from(refs), outer, fill });
     }
-    regions.push({ k: info.lbl[c], area: outerA, subs });
+    const hw = info.lbl[c] === HW;
+    regions.push({ k: hw ? whiteK : info.lbl[c], hid: hw, comp: c, area: outerA, subs });
     if (++doneComps % 64 === 0) progress(0.15 + 0.25 * (doneComps / totalComps));
   }
   // Rapikan titik pertemuan (≥3 region): geser ke rata-rata titik di dekat ujung
@@ -833,7 +954,13 @@ function traceAll(lab, comp, info, W, H, s, o, progress) {
     if (i % 256 === 0) progress(0.4 + 0.6 * (i / chains.length));
   });
   regions.sort((a, b) => b.area - a.area);
-  return { chains, regions, nodes };
+  const compToReg = new Int32Array(info.count).fill(-1);
+  regions.forEach((r, i) => { compToReg[r.comp] = i; delete r.comp; });
+  for (const ch of chains) {
+    ch.a = compToReg[ch.a];
+    ch.b = ch.b >= 0 ? compToReg[ch.b] : -1;
+  }
+  return { chains, regions, nodes, compToReg };
 }
 
 function polyArea(V, W1) {
