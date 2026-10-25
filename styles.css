@@ -88,6 +88,8 @@ svg { display: block; }
 .btn.ghost:hover:not(:disabled) { background: var(--sunk); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); height: 44px; width: 100%; font-size: 15px; }
 .btn.primary:hover:not(:disabled) { filter: brightness(0.95); }
+.btn.dark { background: var(--ink); border-color: var(--ink); color: var(--paper); height: 40px; width: 100%; }
+.btn.dark:hover:not(:disabled) { filter: brightness(1.15); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .seg {

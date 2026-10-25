@@ -69,7 +69,18 @@ function statusOf(it) {
   if (it.inflight) return 'working';
   if (it.error && it.errKey === keyOf(it)) return 'error';
   if (isCurrent(it)) return 'done';
-  return it.result ? 'stale' : 'queued';
+  if (it.want) return 'queued';
+  return it.result ? 'stale' : 'idle';
+}
+// Gambar yang belum diproses / perlu diproses ulang dengan pengaturan sekarang.
+const needsWork = (it) => !it.inflight && !isCurrent(it) && !(it.error && it.errKey === keyOf(it));
+
+// Tombol Proses: antrekan semua gambar yang belum sesuai pengaturan sekarang.
+function processAll() {
+  for (const it of items) if (needsWork(it)) it.want = true;
+  schedule();
+  items.forEach(updateRow);
+  renderBusy();
 }
 
 async function addFiles(fileList) {
@@ -90,6 +101,7 @@ async function addFiles(fileList) {
       progress: 0,
       error: null,
       errKey: null,
+      want: false, // diantrekan lewat tombol Proses
       hide: new Set(), // indeks palet yang disembunyikan
       toggles: [], // titik klik [x, y] (koordinat sumber); tiap klik membalik region di titik itu
       redo: [],
@@ -103,7 +115,6 @@ async function addFiles(fileList) {
   }
   if (selId == null) select(items[0].id);
   refreshAll();
-  schedule();
 }
 
 function probeSize(it) {
@@ -149,7 +160,7 @@ function spawn(slot) {
 for (let i = 0; i < POOL; i++) workers.push(spawn(i));
 
 function nextItem() {
-  const want = (it) => !it.inflight && !isCurrent(it) && !(it.error && it.errKey === keyOf(it));
+  const want = (it) => it.want && needsWork(it);
   const sel = items.find((x) => x.id === selId);
   if (sel && want(sel)) return sel;
   return items.find(want);
@@ -162,6 +173,7 @@ function schedule() {
     if (!it) break;
     const key = keyOf(it);
     it.inflight = key;
+    it.want = false;
     it.progress = 0;
     wk.job = { id: it.id, key };
     wk.w.postMessage({ id: it.id, file: it.file, opts: procOpts() });
@@ -295,7 +307,7 @@ function createRow(it) {
   rowEls.set(it.id, li);
 }
 
-const STATUS_TEXT = { queued: 'Antre', working: 'Memproses', done: 'Selesai', stale: 'Perlu diperbarui', error: 'Gagal' };
+const STATUS_TEXT = { idle: 'Belum diproses', queued: 'Antre', working: 'Memproses', done: 'Selesai', stale: 'Perlu diperbarui', error: 'Gagal' };
 
 function updateRow(it) {
   const li = rowEls.get(it.id);
@@ -351,6 +363,10 @@ function refreshStatus() {
   const done = items.filter((x) => statusOf(x) === 'done').length;
   const work = items.filter((x) => x.inflight).length;
   const err = items.filter((x) => statusOf(x) === 'error').length;
+  const todo = items.filter(needsWork).length;
+  const pb = $('#processBtn');
+  pb.disabled = !todo || busyDownloading;
+  $('#processBtn span').textContent = todo ? `Proses ${todo} gambar` : n ? 'Semua sudah diproses' : 'Proses';
   const parts = [];
   if (!n) parts.push('Belum ada gambar.');
   else {
@@ -395,7 +411,6 @@ function select(id) {
   renderViewer();
   refreshSize();
   refreshName();
-  schedule();
 }
 
 function fit() {
@@ -513,7 +528,9 @@ function renderBusy() {
   if (!it) { vBusy.hidden = true; return; }
   const st = statusOf(it);
   if (st === 'working') { vBusy.hidden = false; vBusy.textContent = `Memproses… ${Math.round(it.progress * 100)}%`; }
-  else if (st === 'queued' || st === 'stale') { vBusy.hidden = false; vBusy.textContent = st === 'stale' ? 'Menunggu proses ulang…' : 'Dalam antrean…'; }
+  else if (st === 'queued') { vBusy.hidden = false; vBusy.textContent = 'Dalam antrean…'; }
+  else if (st === 'idle') { vBusy.hidden = false; vBusy.textContent = 'Atur pengaturan bila perlu, lalu klik Proses.'; }
+  else if (st === 'stale') { vBusy.hidden = false; vBusy.textContent = 'Pengaturan berubah — klik Proses untuk memperbarui. (Pratinjau: hasil sebelumnya)'; }
   else if (st === 'error') { vBusy.hidden = false; vBusy.textContent = `Gagal: ${it.error}`; }
   else vBusy.hidden = true;
 }
@@ -770,15 +787,13 @@ function syncControls() {
   }[S.whiteMode] || '';
 }
 
-let procTimer = 0;
 function changed(opt) {
   saveSettings();
   syncControls();
   if (PROC.includes(opt)) {
     items.forEach(updateRow);
     renderBusy();
-    clearTimeout(procTimer);
-    procTimer = setTimeout(schedule, 350);
+    refreshStatus();
     return;
   }
   if (opt === 'stacking') renderViewer();
@@ -840,8 +855,7 @@ async function downloadAll() {
   const st = $('#pstatus');
   btn.disabled = true;
   try {
-    clearTimeout(procTimer);
-    schedule();
+    if (items.some(needsWork)) processAll();
     if (pendingCount()) {
       st.textContent = 'Menunggu semua gambar selesai diproses…';
       await allDone();
@@ -882,6 +896,7 @@ $('#clearBtn').addEventListener('click', () => {
   for (const it of [...items]) removeItem(it.id);
 });
 $('#downloadBtn').addEventListener('click', downloadAll);
+$('#processBtn').addEventListener('click', processAll);
 
 const veil = $('#dropveil');
 let dragDepth = 0;
