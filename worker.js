@@ -326,6 +326,14 @@ function assignLabels(data, W, H, s, pal, o) {
   // Lereng diukur dengan selisih tengah (x-1 vs x+1, y-1 vs y+1): piksel campuran
   // di tepi dua warna punya selisih besar, sedangkan inti garis tipis (puncak)
   // dan area rata punya selisih kecil.
+  // Upscale bilinear browser patah di tiap pusat piksel sumber → kontur 50%
+  // ikut bergelombang. Blur binomial ringan menghaluskan lipatan itu tanpa
+  // menggeser tepi lurus.
+  if (s >= 1.5) {
+    const passes = Math.max(1, Math.round((0.32 * s) ** 2));
+    for (let k = 0; k < passes; k++) blurPass(data, W, H);
+  }
+
   const lab = new Uint8Array(N);
   const FTW = Math.max(14, 40 / s);
   const CT = FTW * 1.5;
@@ -395,6 +403,35 @@ function assignLabels(data, W, H, s, pal, o) {
     if (lab[i] === U) lab[i] = nearest(data[p], data[p + 1], data[p + 2]);
   }
   return lab;
+}
+
+// Satu lintasan blur binomial [1 4 6 4 1]/16 terpisah (σ ≈ 1 px), di tempat,
+// kanal RGB saja.
+function blurPass(data, W, H) {
+  const RW = W * 4;
+  const row = new Uint8ClampedArray(RW);
+  for (let y = 0; y < H; y++) {
+    const off = y * RW;
+    row.set(data.subarray(off, off + RW));
+    for (let x = 0; x < W; x++) {
+      const a = Math.max(0, x - 2) * 4, b = Math.max(0, x - 1) * 4, c = x * 4;
+      const d = Math.min(W - 1, x + 1) * 4, e = Math.min(W - 1, x + 2) * 4;
+      for (let ch = 0; ch < 3; ch++) {
+        data[off + c + ch] = (row[a + ch] + 4 * row[b + ch] + 6 * row[c + ch] + 4 * row[d + ch] + row[e + ch] + 8) >> 4;
+      }
+    }
+  }
+  let p2 = data.slice(0, RW), p1 = data.slice(0, RW), cur = new Uint8ClampedArray(RW);
+  for (let y = 0; y < H; y++) {
+    const off = y * RW;
+    cur.set(data.subarray(off, off + RW));
+    const n1 = Math.min(H - 1, y + 1) * RW, n2 = Math.min(H - 1, y + 2) * RW;
+    for (let i = 0; i < RW; i++) {
+      if ((i & 3) === 3) continue;
+      data[off + i] = (p2[i] + 4 * p1[i] + 6 * cur[i] + 4 * data[n1 + i] + data[n2 + i] + 8) >> 4;
+    }
+    const t = p2; p2 = p1; p1 = cur; cur = t;
+  }
 }
 
 // ---------------------------------------------------------------- komponen
@@ -795,6 +832,9 @@ function makeFitter(W1, s, o) {
   const lineTol = err * 0.6;
   const K = Math.max(2, Math.min(6, Math.round(1.5 * s)));
   const cornerThr = (o.corner || 62) * (Math.PI / 180);
+  // Penghalusan kuat setelah sudut dikunci: menghapus gelombang tangga piksel
+  // sumber (yang setelah upscale berperiode beberapa piksel kerja).
+  const heavy = Math.min(40, Math.max(2, Math.round(((0.25 + o.smooth) * s) ** 2)));
 
   const vx = (v) => v % W1, vy = (v) => (v / W1) | 0;
 
@@ -827,7 +867,7 @@ function makeFitter(W1, s, o) {
     let Q = smooth(P, n, false, fixed, 1);
     const cor = corners(Q, n, false);
     for (const i of cor) fixed[i] = 1;
-    Q = smooth(Q, n, false, fixed, 2);
+    Q = smooth(Q, n, false, fixed, heavy, true);
     const splits = [0, ...cor, n - 1];
     const out = newPath(Q[0], Q[1]);
     for (let k = 0; k < splits.length - 1; k++) fitPiece(Q, splits[k], splits[k + 1], null, null, out);
@@ -839,7 +879,7 @@ function makeFitter(W1, s, o) {
     let Q = smooth(P, n, true, fixed, 1);
     const cor = corners(Q, n, true);
     if (!cor.length) {
-      Q = smooth(Q, n, true, fixed, 2);
+      Q = smooth(Q, n, true, fixed, heavy, true);
       const ell = n >= 12 ? fitEllipse(Q, n) : null;
       if (ell) return ell;
       // Pecah di dua titik berlawanan dengan tangen kontinu.
@@ -852,7 +892,7 @@ function makeFitter(W1, s, o) {
       return finish(out);
     }
     for (const i of cor) fixed[i] = 1;
-    Q = smooth(Q, n, true, fixed, 2);
+    Q = smooth(Q, n, true, fixed, heavy, true);
     const c0 = cor[0];
     const R = rot(Q, n, c0);
     const splits = cor.map((i) => (i - c0 + n) % n).sort((a, b) => a - b);
@@ -878,14 +918,18 @@ function makeFitter(W1, s, o) {
     return norm(Q[b * 2] - Q[a * 2], Q[b * 2 + 1] - Q[a * 2 + 1]);
   }
 
-  function smooth(P, n, closedPath, fixed, passes) {
+  // Laplacian ([1,2,1]/4); bila taubin, tiap langkah diikuti langkah "mengembang"
+  // (μ < 0) agar bentuk tidak menyusut (penghalusan Taubin).
+  function smooth(P, n, closedPath, fixed, passes, taubin) {
     let a = P, b = new Float64Array(P.length);
-    for (let ps = 0; ps < passes; ps++) {
+    const steps = taubin ? passes * 2 : passes;
+    for (let ps = 0; ps < steps; ps++) {
+      const f = taubin && ps & 1 ? -0.53 : 0.5;
       for (let i = 0; i < n; i++) {
         if (fixed[i] || (!closedPath && (i === 0 || i === n - 1))) { b[i * 2] = a[i * 2]; b[i * 2 + 1] = a[i * 2 + 1]; continue; }
         const im = closedPath ? (i - 1 + n) % n : i - 1, ip = closedPath ? (i + 1) % n : i + 1;
-        b[i * 2] = (a[im * 2] + 2 * a[i * 2] + a[ip * 2]) / 4;
-        b[i * 2 + 1] = (a[im * 2 + 1] + 2 * a[i * 2 + 1] + a[ip * 2 + 1]) / 4;
+        b[i * 2] = a[i * 2] + f * ((a[im * 2] + a[ip * 2]) / 2 - a[i * 2]);
+        b[i * 2 + 1] = a[i * 2 + 1] + f * ((a[im * 2 + 1] + a[ip * 2 + 1]) / 2 - a[i * 2 + 1]);
       }
       const t = a === P ? new Float64Array(P.length) : a;
       a = b; b = t;

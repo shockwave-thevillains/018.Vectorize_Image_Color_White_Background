@@ -6,7 +6,7 @@ const DEFAULTS = {
   colorAuto: 1,
   maxColors: 12,
   colorMerge: 10,
-  smooth: 0.35,
+  smooth: 0.55,
   minArea: 6,
   corner: 62,
   whiteMode: 'smart',
@@ -25,10 +25,10 @@ const GAP_WIDTH = 1.5; // px output
 
 const S = { ...DEFAULTS, ...loadSettings() };
 function loadSettings() {
-  try { return JSON.parse(localStorage.getItem('vektor.settings') || '{}'); } catch { return {}; }
+  try { return JSON.parse(localStorage.getItem('vektor.settings.v2') || '{}'); } catch { return {}; }
 }
 function saveSettings() {
-  try { localStorage.setItem('vektor.settings', JSON.stringify(S)); } catch { /* mode privat */ }
+  try { localStorage.setItem('vektor.settings.v2', JSON.stringify(S)); } catch { /* mode privat */ }
 }
 
 const $ = (s, r = document) => r.querySelector(s);
