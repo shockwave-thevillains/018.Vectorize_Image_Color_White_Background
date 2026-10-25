@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610250815';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610251157';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -13,6 +13,8 @@ const DEFAULTS = {
   smooth: 0.8,
   minArea: 6,
   corner: 70,
+  bgKey: 'white',
+  keyTol: 30,
   whiteMode: 'outer',
   whiteTol: 10,
   learn: true,
@@ -24,7 +26,7 @@ const DEFAULTS = {
   start: 1,
   format: 'both',
 };
-const PROC = ['mode', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
+const PROC = ['bgKey', 'keyTol', 'mode', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
 const MAX_WORK = 4096 * 4096;
 const GAP_WIDTH = 1.5; // px output
 
@@ -55,6 +57,8 @@ let seq = 0;
 
 function procOpts() {
   return {
+    bgKey: S.bgKey === 'magenta' ? 'magenta' : null,
+    keyTol: S.keyTol,
     mode: S.mode,
     silTones: S.silTones,
     silThreshold: S.silThreshold,
@@ -155,7 +159,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202610250815');
+  const w = new Worker('worker.js?v=202610251157');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -171,11 +175,11 @@ function spawn(slot) {
 for (let i = 0; i < POOL; i++) workers.push(spawn(i));
 
 // ---------------------------------------------------------------- AI (opsional)
-const needAI = () => S.mode === 'color' && S.whiteMode === 'ai';
+const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey !== 'magenta';
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202610250815', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202610251157', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -650,7 +654,7 @@ function renderViewer() {
     const hidden = hiddenFor(it);
     // Kandidat: area putih di dalam gambar (tidak menyentuh tepi) yang masih tampil.
     let cand = '';
-    res.regions.forEach((r, i) => { if (r.f && !r.f[1] && !hidden[i]) cand += regionPathCached(it, i); });
+    if (S.bgKey !== 'magenta') res.regions.forEach((r, i) => { if (r.f && !r.f[1] && !hidden[i]) cand += regionPathCached(it, i); });
     vVec.innerHTML = `<g transform="${groupTransform(res)}">${previewMarkup(res, { stacking: S.stacking, recolor: it.recolor, hidden })}`
       + (cand ? `<path class="cand" d="${cand}"/>` : '') + '</g>';
     vOut.dataset.for = vLensOut.dataset.for = '';
@@ -897,6 +901,7 @@ const LABELS = {
   corner: (v) => `${v}°`,
   whiteTol: (v) => `ΔE ${v}`,
   silThreshold: (v) => `${v}`,
+  keyTol: (v) => `${v}%`,
 };
 
 function syncControls() {
@@ -921,7 +926,11 @@ function syncControls() {
     ? 'Bentuk ditumpuk dari belakang ke depan — tanpa retak di bentuk bersarang, mudah diedit.'
     : 'Bentuk saling memotong tanpa tumpang tindih — cocok untuk cutting plotter dan sablon.';
   const keys = [S.mode, `${S.mode}:${S.silTones}`];
-  $$('[data-show]').forEach((el) => { el.hidden = !el.dataset.show.split(' ').some((t) => keys.includes(t)); });
+  $$('[data-show], [data-bg]').forEach((el) => {
+    const okMode = !el.dataset.show || el.dataset.show.split(' ').some((t) => keys.includes(t));
+    const okBg = !el.dataset.bg || el.dataset.bg === S.bgKey;
+    el.hidden = !(okMode && okBg);
+  });
   $('#cavityNote').textContent = {
     smart: 'Eksperimental: juga menebak putih terkurung yang termasuk latar. Bisa keliru — periksa hasilnya.',
     transparent: 'Semua putih menjadi transparan, termasuk di dalam objek (bisa dikembalikan dengan klik).',

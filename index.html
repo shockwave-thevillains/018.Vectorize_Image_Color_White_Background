@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=202610250815">
+  <link rel="stylesheet" href="styles.css?v=202610251157">
 </head>
 <body>
   <header class="top">
@@ -157,8 +157,21 @@
         </section>
 
         <section class="group">
-          <h3><span class="n mono">02</span> Latar putih</h3>
-          <div class="field" data-show="silhouette">
+          <h3><span class="n mono">02</span> Latar</h3>
+          <div class="field">
+            <div class="flabel">Warna latar gambar</div>
+            <div class="seg wide" data-opt="bgKey">
+              <button type="button" data-v="white">Putih</button>
+              <button type="button" data-v="magenta"><i class="dot-mg" aria-hidden="true"></i>Magenta</button>
+            </div>
+          </div>
+          <div class="field" data-bg="magenta">
+            <label class="flabel" for="keyTol">Toleransi magenta <output class="mono" for="keyTol"></output></label>
+            <input type="range" id="keyTol" data-opt="keyTol" min="0" max="50" step="1">
+            <div class="scale mono"><span>hanya magenta murni</span><span>ungu/pink ikut</span></div>
+            <p class="note">Semua warna sedekat ini dengan magenta menjadi transparan. Putih di mana pun tetap putih.</p>
+          </div>
+          <div class="field" data-show="silhouette" data-bg="white">
             <div class="flabel">Rongga di dalam siluet</div>
             <div class="seg wide" data-opt="cavity">
               <button type="button" data-v="white">Luar</button>
@@ -168,8 +181,8 @@
             </div>
             <p class="note" id="cavityNote"></p>
           </div>
-          <div class="field" data-show="color">
-            <div class="flabel">Jadikan transparan</div>
+          <div class="field" data-show="color" data-bg="white">
+            <div class="flabel">Putih yang dijadikan transparan</div>
             <div class="seg wide" data-opt="whiteMode">
               <button type="button" data-v="off">Tidak</button>
               <button type="button" data-v="outer">Luar</button>
@@ -179,7 +192,7 @@
             </div>
             <p class="note" id="whiteNote"></p>
           </div>
-          <div class="field" data-show="color silhouette:gray">
+          <div class="field" data-show="color silhouette:gray" data-bg="white">
             <label class="flabel" for="whiteTol">Toleransi putih <output class="mono" for="whiteTol"></output></label>
             <input type="range" id="whiteTol" data-opt="whiteTol" min="2" max="30" step="1">
           </div>
@@ -253,6 +266,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202610250815"></script>
+  <script type="module" src="app.js?v=202610251157"></script>
 </body>
 </html>

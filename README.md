@@ -11,6 +11,7 @@ jadi bisa di-host gratis di GitHub Pages.
   - *Warna*: palet otomatis (atau dibatasi), cocok untuk ilustrasi flat.
   - *Siluet*: 2 warna (hitam pekat + putih) dengan ambang gelap/terang yang bisa diatur — untuk stensil, emblem, siluet. Rongga di dalam siluet bisa **Transparan**, **Isi** (siluet padat), atau **Putih**.
 - **Upscale sebelum tracing** (default 4×) agar batas warna jatuh di posisi sub-piksel.
+- **Latar magenta (disarankan)**: buat gambar dengan latar #FF00FF, pilih *Warna latar: Magenta*. Semua warna dalam toleransi (0–50 %, bawaan 30 %) dari magenta menjadi transparan; putih di mana pun tetap putih. Pinggiran keunguan akibat antialias/JPEG dibersihkan otomatis.
 - **Latar putih → transparan**
   - *Luar*: hanya putih yang tersambung ke tepi gambar (dengan penutup celah garis, jadi tidak bocor ke dalam objek).
   - *Luar* (bawaan): hanya putih yang tersambung ke tepi; putih di dalam ditandai garis putus-putus untuk diklik.

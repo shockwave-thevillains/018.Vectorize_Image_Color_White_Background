@@ -63,6 +63,12 @@ async function vectorize(file, o, progress, aiMask) {
   g0.drawImage(bmp, 0, 0);
   const src = g0.getImageData(0, 0, sw, sh).data;
 
+  // Latar berwarna kunci (mis. magenta): dibuang di tingkat piksel sebelum apa pun.
+  if (o.bgKey === 'magenta') {
+    chromaKey(src, sw, sh, [255, 0, 255], (o.keyTol ?? 30) / 100);
+    g0.putImageData(new ImageData(src, sw, sh), 0, 0);
+  }
+
   // Mode siluet: 2 warna tetap (hitam pekat + putih), ambang luminans.
   const sil = o.mode === 'silhouette';
   const binary = sil && o.silTones === 'binary';
@@ -139,7 +145,7 @@ async function vectorize(file, o, progress, aiMask) {
   // Warna putih utama (untuk bentuk latar yang disembunyikan).
   let whiteK = -1;
   pal.forEach((p, k) => { if (isWhite[k] && (whiteK < 0 || p.n > pal[whiteK].n)) whiteK = k; });
-  let mode = sil ? (o.cavity === 'transparent' ? 'all' : o.cavity === 'smart' ? 'smart' : 'outer') : o.whiteMode || 'outer';
+  let mode = o.bgKey ? 'off' : sil ? (o.cavity === 'transparent' ? 'all' : o.cavity === 'smart' ? 'smart' : 'outer') : o.whiteMode || 'outer';
   const useAI = mode === 'ai' && aiMask;
   if (mode === 'ai') mode = 'outer';
   if (whiteK >= 0) {
@@ -248,6 +254,102 @@ async function vectorize(file, o, progress, aiMask) {
   };
 }
 
+// ---------------------------------------------------------------- chroma key
+// Piksel yang jaraknya ke warna kunci ≤ toleransi → transparan. Piksel tepi
+// (campuran objek + kunci, akibat antialias) mendapat alpha sesuai porsi
+// objeknya dan warna objek murni dari tetangga terdekat yang bersih, sehingga
+// tidak ada pinggiran ungu dan tepi tetap sub-piksel setelah upscale.
+function chromaKey(px, w, h, key, tol) {
+  const N = w * h;
+  const MAXD = Math.sqrt(3) * 255;
+  const t0 = tol * MAXD;
+  const t1 = Math.min(MAXD, t0 + Math.max(40, 0.35 * MAXD * (0.5 - tol) + 40));
+  const d = new Float32Array(N);
+  for (let i = 0, p = 0; i < N; i++, p += 4) {
+    d[i] = px[p + 3] < 16 ? 0 : Math.hypot(px[p] - key[0], px[p + 1] - key[1], px[p + 2] - key[2]);
+  }
+  const R = 3;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x, p = i * 4;
+      const di = d[i];
+      if (di <= t0) { px[p + 3] = 0; continue; }
+      if (di >= t1) continue;
+      // Warna objek murni: tetangga terdekat yang jauh dari kunci.
+      let best = -1, bd = Infinity;
+      for (let dy = -R; dy <= R; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        for (let dx = -R; dx <= R; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          const j = yy * w + xx;
+          if (d[j] < t1) continue;
+          const dd = dx * dx + dy * dy;
+          if (dd < bd) { bd = dd; best = j; }
+        }
+      }
+      let a;
+      if (best >= 0) {
+        const q = best * 4;
+        const cr = px[q], cg = px[q + 1], cb = px[q + 2];
+        // Porsi objek: proyeksi piksel pada garis kunci → warna objek.
+        const vx = cr - key[0], vy = cg - key[1], vz = cb - key[2];
+        const vv = vx * vx + vy * vy + vz * vz || 1;
+        a = ((px[p] - key[0]) * vx + (px[p + 1] - key[1]) * vy + (px[p + 2] - key[2]) * vz) / vv;
+        px[p] = cr; px[p + 1] = cg; px[p + 2] = cb;
+      } else {
+        a = (di - t0) / (t1 - t0);
+      }
+      px[p + 3] = Math.round(255 * Math.max(0, Math.min(1, a)));
+    }
+  }
+  // Lapis 2 — rembesan warna kunci (mis. kompresi JPEG): piksel ≤ 3 px dari area
+  // transparan yang warnanya = campuran warna objek di dekatnya + kunci.
+  const dt = new Uint8Array(N).fill(255);
+  let cur = [];
+  for (let i = 0; i < N; i++) if (px[i * 4 + 3] === 0) { dt[i] = 0; cur.push(i); }
+  for (let step = 1; step <= 6 && cur.length; step++) {
+    const next = [];
+    for (const i of cur) {
+      const x = i % w;
+      const nb = [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i >= w ? i - w : -1, i < N - w ? i + w : -1];
+      for (const j of nb) if (j >= 0 && dt[j] === 255) { dt[j] = step; next.push(j); }
+    }
+    cur = next;
+  }
+  const R2 = 6;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x, p = i * 4;
+      if (dt[i] === 0 || dt[i] > 3 || px[p + 3] < 255) continue;
+      let bestRes = 22, bc = -1, ba = 1;
+      for (let dy = -R2; dy <= R2; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        for (let dx = -R2; dx <= R2; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          const j = yy * w + xx;
+          if (dt[j] <= 3 || px[j * 4 + 3] < 255) continue; // kandidat = warna bersih di dalam objek
+          const q = j * 4;
+          const vx = px[q] - key[0], vy = px[q + 1] - key[1], vz = px[q + 2] - key[2];
+          const vv = vx * vx + vy * vy + vz * vz;
+          if (vv < 400) continue;
+          const wx = px[p] - key[0], wy = px[p + 1] - key[1], wz = px[p + 2] - key[2];
+          const a = (wx * vx + wy * vy + wz * vz) / vv;
+          if (a < 0 || a > 1.05) continue;
+          const res = Math.hypot(wx - a * vx, wy - a * vy, wz - a * vz);
+          if (res < bestRes) { bestRes = res; bc = q; ba = a; }
+        }
+      }
+      if (bc < 0 || ba > 0.97) continue;
+      px[p] = px[bc]; px[p + 1] = px[bc + 1]; px[p + 2] = px[bc + 2];
+      px[p + 3] = Math.round(255 * Math.min(1, ba));
+    }
+  }
+}
+
 // ---------------------------------------------------------------- palet
 function buildPalette(px, w, h, o) {
   const cnt = new Float64Array(32768);
@@ -263,7 +365,7 @@ function buildPalette(px, w, h, o) {
       const a = px[p + 3];
       if (a < 128) continue;
       let r = px[p], g = px[p + 1], b = px[p + 2];
-      if (a < 255) {
+      if (a < 255 && !o.bgKey) {
         const k = a / 255;
         r = Math.round(r * k + 255 * (1 - k));
         g = Math.round(g * k + 255 * (1 - k));
@@ -371,6 +473,29 @@ function buildPalette(px, w, h, o) {
     P.splice(b, 1);
   }
 
+  // Latar kunci: warna yang berada di antara warna kunci dan warna lain di palet
+  // adalah rembesan kunci (mis. navy keunguan di tepi garis) → lebur ke warna aslinya.
+  if (o.bgKey === 'magenta') {
+    const K = [255, 0, 255];
+    for (let k = P.length - 1; k >= 0 && P.length > 1; k--) {
+      const c = P[k];
+      let bi = -1, br = 20; // selisih RGB maksimum dari garis campuran
+      for (let i = 0; i < P.length; i++) {
+        if (i === k) continue;
+        const b = P[i];
+        const vx = K[0] - b.r, vy = K[1] - b.g, vz = K[2] - b.b, vv = vx * vx + vy * vy + vz * vz;
+        if (vv < 1) continue;
+        const t = ((c.r - b.r) * vx + (c.g - b.g) * vy + (c.b - b.b) * vz) / vv;
+        if (t < 0.05 || t > 0.8) continue;
+        const r = Math.hypot(b.r + t * vx - c.r, b.g + t * vy - c.g, b.b + t * vz - c.b);
+        if (r < br) { br = r; bi = i; }
+      }
+      if (bi < 0) continue;
+      P[bi].n += c.n; // warna asli tetap milik b; jumlah piksel digabung
+      P.splice(k, 1);
+    }
+  }
+
   // Buang warna "campuran": porsi kecil dan berada di antara dua warna lain
   // (piksel transisi antialias, mis. abu-abu di tepi hitam–putih).
   const totalN = P.reduce((t, p) => t + p.n, 0);
@@ -437,7 +562,7 @@ function assignLabels(data, W, H, s, pal, o) {
   // Komposit atas putih → RGB kerja (ditulis di tempat).
   for (let i = 0, p = 0; i < N; i++, p += 4) {
     const a = data[p + 3];
-    if (a < 255 && a >= 128) {
+    if (a < 255 && a >= 128 && !o.bgKey) {
       const k = a / 255;
       data[p] = data[p] * k + 255 * (1 - k);
       data[p + 1] = data[p + 1] * k + 255 * (1 - k);
@@ -673,8 +798,10 @@ function flowSmooth(px, w, h, R) {
   const sample = (x, y, wk) => {
     const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
     const p00 = (y0 * w + x0) * 4, p10 = p00 + 4, p01 = p00 + W4, p11 = p01 + 4;
+    if (px[p00 + 3] < 255 || px[p10 + 3] < 255 || px[p01 + 3] < 255 || px[p11 + 3] < 255) return false; // jangan campur area transparan
     const a = (1 - fx) * (1 - fy), b = fx * (1 - fy), c = (1 - fx) * fy, d = fx * fy;
     for (let ch = 0; ch < 3; ch++) acc[ch] += wk * (a * px[p00 + ch] + b * px[p10 + ch] + c * px[p01 + ch] + d * px[p11 + ch]);
+    return true;
   };
   for (let y = 1; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
@@ -682,6 +809,7 @@ function flowSmooth(px, w, h, R) {
       const wt = WT[i];
       if (!wt) continue;
       const p = i * 4;
+      if (px[p + 3] < 255) continue;
       acc[0] = px[p]; acc[1] = px[p + 1]; acc[2] = px[p + 2];
       let wsum = 1;
       for (let dir = -1; dir <= 1; dir += 2) {
@@ -696,8 +824,7 @@ function flowSmooth(px, w, h, R) {
             vx = tx; vy = ty;
           }
           const wk = Math.exp(-(k * k) / sig2);
-          sample(sx, sy, wk);
-          wsum += wk;
+          if (sample(sx, sy, wk)) wsum += wk;
         }
       }
       for (let ch = 0; ch < 3; ch++) out[p + ch] = px[p + ch] + wt * (acc[ch] / wsum - px[p + ch]);

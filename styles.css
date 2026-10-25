@@ -499,3 +499,5 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius
 .learn .check { margin-bottom: 8px; }
 .learn-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
 .learn-row .mono { font-size: 11px; color: var(--muted); }
+
+.dot-mg { display: inline-block; width: 9px; height: 9px; border-radius: 2px; background: #ff00ff; margin-right: 6px; vertical-align: -1px; }
