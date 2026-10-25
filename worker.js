@@ -1036,9 +1036,8 @@ function makeFitter(W1, s, o) {
     const cor = corners(Q, n, false);
     for (const i of cor) fixed[i] = 1;
     Q = smooth(Q, n, false, fixed, heavy, true);
-    const splits = [0, ...cor, n - 1];
     const out = newPath(Q[0], Q[1]);
-    for (let k = 0; k < splits.length - 1; k++) fitPiece(Q, splits[k], splits[k + 1], null, null, out);
+    fitSmart(Q, 0, n - 1, null, null, out, cor);
     return finish(out);
   }
 
@@ -1055,8 +1054,8 @@ function makeFitter(W1, s, o) {
       const h = n >> 1;
       const tA = centerTan(Q, n, 0), tB = centerTan(Q, n, h);
       const out = newPath(R[0], R[1]);
-      fitPiece(R, 0, h, tA, [-tB[0], -tB[1]], out);
-      fitPiece(R, h, n, tB, [-tA[0], -tA[1]], out);
+      fitSmart(R, 0, h, tA, [-tB[0], -tB[1]], out);
+      fitSmart(R, h, n, tB, [-tA[0], -tA[1]], out);
       return finish(out);
     }
     for (const i of cor) fixed[i] = 1;
@@ -1066,7 +1065,7 @@ function makeFitter(W1, s, o) {
     const splits = cor.map((i) => (i - c0 + n) % n).sort((a, b) => a - b);
     splits.push(n);
     const out = newPath(R[0], R[1]);
-    for (let k = 0; k < splits.length - 1; k++) fitPiece(R, splits[k], splits[k + 1], null, null, out);
+    fitSmart(R, 0, n, null, null, out, splits.slice(1, -1));
     return finish(out);
   }
 
@@ -1140,6 +1139,144 @@ function makeFitter(W1, s, o) {
       if (isMax) res.push(i);
     }
     return res;
+  }
+
+  // ---- garis lurus & sudut tajam -------------------------------------------
+  // Bagian yang lurus dijadikan satu garis lurus sempurna. Busur halus tidak
+  // ikut diluruskan: pada garis lurus yang bergetar, simpangan titik tersebar
+  // di kedua sisi (rata-rata bertanda ≈ 0); pada busur selalu condong ke satu sisi.
+  const runMaxDev = 0.45 * s;          // simpangan maksimum dari garis
+  const runBias = 0.08 * s;            // rata-rata simpangan bertanda maksimum
+  const minRun = Math.max(5, 4.5 * s); // panjang minimum garis lurus (≈ 4,5 px sumber)
+  const sharpGap = 4.5 * s;            // lengkung sependek ini di antara 2 garis → sudut tajam
+  const mergeAng = 9 * (Math.PI / 180);
+  const sharpMin = 7 * s;
+  const sharpAng = 25 * (Math.PI / 180);
+
+  function lineOk(Q, i, j) {
+    const ax = Q[i * 2], ay = Q[i * 2 + 1];
+    const dx = Q[j * 2] - ax, dy = Q[j * 2 + 1] - ay;
+    const L = Math.hypot(dx, dy);
+    if (L < 1e-9) return 0;
+    let mx = 0, sum = 0;
+    for (let k = i + 1; k < j; k++) {
+      const d = ((Q[k * 2] - ax) * dy - (Q[k * 2 + 1] - ay) * dx) / L;
+      sum += d;
+      const ad = d < 0 ? -d : d;
+      if (ad > mx) { mx = ad; if (mx > runMaxDev) return 0; }
+    }
+    const cnt = j - i - 1;
+    if (cnt > 0 && Math.abs(sum / cnt) > runBias) return 0;
+    return L;
+  }
+
+  function findRuns(Q, a, b) {
+    const runs = [];
+    const step = Math.max(1, Math.round(s));
+    let i = a;
+    while (i < b - 2) {
+      let j = Math.min(b, i + Math.ceil(minRun));
+      const L = lineOk(Q, i, j);
+      if (!L || L < minRun * 0.85) { i += step; continue; }
+      let good = j;
+      while (good < b) { const nj = Math.min(b, good + step); if (lineOk(Q, i, nj)) good = nj; else break; }
+      while (good < b && lineOk(Q, i, good + 1)) good++;
+      runs.push({ i0: i, i1: good, p0: [Q[i * 2], Q[i * 2 + 1]], p1: [Q[good * 2], Q[good * 2 + 1]] });
+      i = good;
+    }
+    // Gabungkan potongan berurutan yang hampir segaris menjadi satu garis lurus.
+    for (let k = 0; k < runs.length - 1; ) {
+      const r1 = runs[k], r2 = runs[k + 1];
+      const d1 = norm(r1.p1[0] - r1.p0[0], r1.p1[1] - r1.p0[1]);
+      const d2 = norm(r2.p1[0] - r2.p0[0], r2.p1[1] - r2.p0[1]);
+      const ang = Math.acos(Math.max(-1, Math.min(1, d1[0] * d2[0] + d1[1] * d2[1])));
+      if (ang < mergeAng && arcLen(Q, r1.i1, r2.i0) <= sharpGap && maxDev(Q, r1.i0, r2.i1) <= runMaxDev * 1.6) {
+        runs.splice(k, 2, { i0: r1.i0, i1: r2.i1, p0: r1.p0, p1: r2.p1 });
+      } else k++;
+    }
+    return runs;
+  }
+
+  function maxDev(Q, i, j) {
+    const ax = Q[i * 2], ay = Q[i * 2 + 1];
+    const dx = Q[j * 2] - ax, dy = Q[j * 2 + 1] - ay;
+    const L = Math.hypot(dx, dy) || 1;
+    let mx = 0;
+    for (let k = i + 1; k < j; k++) mx = Math.max(mx, Math.abs((Q[k * 2] - ax) * dy - (Q[k * 2 + 1] - ay) * dx) / L);
+    return mx;
+  }
+
+  function arcLen(Q, i, j) {
+    let l = 0;
+    for (let k = i; k < j; k++) l += Math.hypot(Q[(k + 1) * 2] - Q[k * 2], Q[(k + 1) * 2 + 1] - Q[k * 2 + 1]);
+    return l;
+  }
+
+  // Kurva di antara garis lurus dipecah di titik sudut (cs) yang ada di dalamnya.
+  function fitGap(Q, i0, i1, t1, t2, out, cs) {
+    const pts = [i0];
+    for (const c of cs) if (c > i0 && c < i1) pts.push(c);
+    pts.push(i1);
+    for (let k = 0; k < pts.length - 1; k++) {
+      fitPiece(Q, pts[k], pts[k + 1], k === 0 ? t1 : null, k === pts.length - 2 ? t2 : null, out);
+    }
+  }
+
+  function fitSmart(Q, a, b, tA, tB, out, cs = []) {
+    const runs = findRuns(Q, a, b);
+    if (!runs.length) { fitGap(Q, a, b, tA, tB, out, cs); return; }
+    const dir = (r) => norm(r.p1[0] - r.p0[0], r.p1[1] - r.p0[1]);
+    // Penajaman: dua garis yang dipisah lengkung pendek → bertemu di titik potong.
+    const sharp = new Uint8Array(runs.length);
+    for (let k = 0; k < runs.length - 1; k++) {
+      const r1 = runs[k], r2 = runs[k + 1];
+      if (arcLen(Q, r1.i1, r2.i0) > sharpGap) continue;
+      // Hanya sisi lurus yang cukup panjang (kotak, kartu) — bukan faset bentuk organik.
+      const l1 = Math.hypot(r1.p1[0] - r1.p0[0], r1.p1[1] - r1.p0[1]);
+      const l2 = Math.hypot(r2.p1[0] - r2.p0[0], r2.p1[1] - r2.p0[1]);
+      if (Math.min(l1, l2) < sharpMin) continue;
+      const d1 = dir(r1), d2 = dir(r2);
+      const ang = Math.acos(Math.max(-1, Math.min(1, d1[0] * d2[0] + d1[1] * d2[1])));
+      if (ang < sharpAng) continue;
+      const den = d1[0] * d2[1] - d1[1] * d2[0];
+      if (Math.abs(den) < 1e-6) continue;
+      const wx = r2.p0[0] - r1.p0[0], wy = r2.p0[1] - r1.p0[1];
+      const t = (wx * d2[1] - wy * d2[0]) / den;
+      const X = [r1.p0[0] + t * d1[0], r1.p0[1] + t * d1[1]];
+      if (Math.hypot(X[0] - r1.p1[0], X[1] - r1.p1[1]) > sharpGap || Math.hypot(X[0] - r2.p0[0], X[1] - r2.p0[1]) > sharpGap) continue;
+      r1.p1 = X; r2.p0 = X; sharp[k] = 1;
+    }
+    // Dua garis yang bersambung tanpa sudut tajam = sebenarnya lengkungan →
+    // kembalikan keduanya ke kurva (menghindari tampilan bersegi).
+    const drop = new Uint8Array(runs.length);
+    for (let k = 0; k < runs.length - 1; k++) {
+      if (sharp[k]) continue;
+      if (arcLen(Q, runs[k].i1, runs[k + 1].i0) <= sharpGap) { drop[k] = 1; drop[k + 1] = 1; }
+    }
+    for (let k = 0; k < runs.length; k++) {
+      if (!drop[k]) continue;
+      // garis yang ikut tertajamkan dengan tetangga lain tetap dipertahankan
+      if ((k > 0 && sharp[k - 1]) || sharp[k]) drop[k] = 0;
+    }
+    const keep = [], keepSharp = [];
+    for (let k = 0; k < runs.length; k++) {
+      if (drop[k]) continue;
+      keep.push(runs[k]);
+      keepSharp.push(sharp[k] && k + 1 < runs.length && !drop[k + 1] ? 1 : 0);
+    }
+    if (!keep.length) { fitGap(Q, a, b, tA, tB, out, cs); return; }
+    runs.length = 0; runs.push(...keep);
+    sharp.set(keepSharp.concat(new Array(sharp.length - keepSharp.length).fill(0)));
+    let cur = a;
+    let curTan = tA;
+    for (let k = 0; k < runs.length; k++) {
+      const r = runs[k], d = dir(r);
+      if (r.i0 > cur && !(k > 0 && sharp[k - 1])) fitGap(Q, cur, r.i0, curTan, [-d[0], -d[1]], out, cs);
+      lineTo(out, r.p1[0], r.p1[1]);
+      cur = r.i1;
+      curTan = d;
+    }
+    if (cur < b) fitGap(Q, cur, b, curTan, tB, out, cs);
   }
 
   function fitPiece(Q, a, b, tA, tB, out) {
