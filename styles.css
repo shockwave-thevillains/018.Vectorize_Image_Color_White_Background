@@ -501,3 +501,7 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius
 .learn-row .mono { font-size: 11px; color: var(--muted); }
 
 .dot-mg { display: inline-block; width: 9px; height: 9px; border-radius: 2px; background: #ff00ff; margin-right: 6px; vertical-align: -1px; }
+
+/* Latar pratinjau: dipilih pengguna, terlepas dari tema */
+.stage.bg-light { --check-a: #e4e2dc; --check-b: #ffffff; }
+.stage.bg-dark { --check-a: #2a2a27; --check-b: #353531; }

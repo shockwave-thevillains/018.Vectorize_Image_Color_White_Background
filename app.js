@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610251157';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610251231';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -159,7 +159,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202610251157');
+  const w = new Worker('worker.js?v=202610251231');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -179,7 +179,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey !== '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202610251157', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202610251231', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -531,6 +531,16 @@ const LENS_R = 90;
 
 const V = { z: 1, px: 0, py: 0, mode: 'vector', lens: true, split: 0.5, fitted: false, mx: -1, my: -1, hover: false };
 try { const m = localStorage.getItem('vektor.mode'); if (m) V.mode = m; } catch { /* abaikan */ }
+// Latar pratinjau (hanya tampilan; tidak memengaruhi hasil atau proses).
+const prefersDark = () => window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
+try { V.bg = localStorage.getItem('vektor.stagebg') || ''; } catch { V.bg = ''; }
+function applyStageBg() {
+  const bg = V.bg || (prefersDark() ? 'dark' : 'light');
+  stage.classList.toggle('bg-light', bg === 'light');
+  stage.classList.toggle('bg-dark', bg === 'dark');
+  const b = $('[data-act="bg"]');
+  if (b) b.setAttribute('aria-pressed', String(bg === 'light'));
+}
 
 const selected = () => items.find((x) => x.id === selId) || null;
 
@@ -845,6 +855,12 @@ function toolAct(act) {
   else if (act === 'fit') fit();
   else if (act === 'one') { V.fitted = false; zoomAt(sw / 2, sh / 2, 1 / V.z); }
   else if (act === 'lens') { V.lens = !V.lens; applyMode(); }
+  else if (act === 'bg') {
+    V.bg = (V.bg || (prefersDark() ? 'dark' : 'light')) === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('vektor.stagebg', V.bg); } catch { /* abaikan */ }
+    applyStageBg();
+    return;
+  }
   if (act !== 'fit' && act !== 'lens') V.fitted = false;
 }
 $$('.tools [data-act]').forEach((b) => b.addEventListener('click', () => toolAct(b.dataset.act)));
@@ -857,7 +873,7 @@ window.addEventListener('keydown', (e) => {
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redoClick(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  const map = { '+': 'zoomin', '=': 'zoomin', '-': 'zoomout', '0': 'fit', '1': 'one', l: 'lens', L: 'lens' };
+  const map = { '+': 'zoomin', '=': 'zoomin', '-': 'zoomout', '0': 'fit', '1': 'one', l: 'lens', L: 'lens', b: 'bg', B: 'bg' };
   if (map[e.key] && selected()) { toolAct(map[e.key]); e.preventDefault(); }
   const modes = { c: 'compare', v: 'vector', o: 'outline' };
   if (modes[e.key] && selected()) { V.mode = modes[e.key]; applyMode(); }
@@ -1088,6 +1104,7 @@ window.addEventListener('paste', (e) => {
 
 // ---------------------------------------------------------------- mulai
 bindSettings();
+applyStageBg();
 syncControls();
 refreshLearn();
 refreshAll();

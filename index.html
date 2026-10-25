@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=202610251157">
+  <link rel="stylesheet" href="styles.css?v=202610251231">
 </head>
 <body>
   <header class="top">
@@ -40,6 +40,7 @@
             <button type="button" class="icon" data-act="fit" title="Pas layar (0)"><svg viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></button>
             <button type="button" class="icon txt" data-act="one" title="Ukuran piksel asli (1)">1:1</button>
             <button type="button" class="icon" data-act="lens" aria-pressed="true" title="Lensa piksel (L)"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6 5h1v1H6zM8 7h1v1H8zM6 9h1v1H6zM10 9h1v1h-1z" fill="currentColor"/></svg></button>
+            <button type="button" class="icon" data-act="bg" title="Latar pratinjau: gelap / terang (B) — hanya tampilan"><svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 13.5 13.5 2.5V12a1.5 1.5 0 0 1-1.5 1.5z" fill="currentColor"/></svg></button>
             <span class="zoom mono" id="zoomLabel">100%</span>
           </div>
           <div class="vinfo mono" id="vinfo"></div>
@@ -266,6 +267,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202610251157"></script>
+  <script type="module" src="app.js?v=202610251231"></script>
 </body>
 </html>
