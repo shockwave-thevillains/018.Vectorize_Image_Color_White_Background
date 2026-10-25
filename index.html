@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=202610251231">
+  <link rel="stylesheet" href="styles.css?v=202610251336">
 </head>
 <body>
   <header class="top">
@@ -162,9 +162,11 @@
           <div class="field">
             <div class="flabel">Warna latar gambar</div>
             <div class="seg wide" data-opt="bgKey">
+              <button type="button" data-v="none">Tanpa</button>
               <button type="button" data-v="white">Putih</button>
               <button type="button" data-v="magenta"><i class="dot-mg" aria-hidden="true"></i>Magenta</button>
             </div>
+            <p class="note" data-bg="none">Tidak ada warna yang dihapus — semua warna, termasuk putih dan magenta, ikut divectorisasi. Klik bentuk di pratinjau bila ingin menghapus bagian tertentu.</p>
           </div>
           <div class="field" data-bg="magenta">
             <label class="flabel" for="keyTol">Toleransi magenta <output class="mono" for="keyTol"></output></label>
@@ -267,6 +269,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202610251231"></script>
+  <script type="module" src="app.js?v=202610251336"></script>
 </body>
 </html>

@@ -365,7 +365,7 @@ function buildPalette(px, w, h, o) {
       const a = px[p + 3];
       if (a < 128) continue;
       let r = px[p], g = px[p + 1], b = px[p + 2];
-      if (a < 255 && !o.bgKey) {
+      if (a < 255 && o.bgKey !== 'magenta') {
         const k = a / 255;
         r = Math.round(r * k + 255 * (1 - k));
         g = Math.round(g * k + 255 * (1 - k));
@@ -562,7 +562,7 @@ function assignLabels(data, W, H, s, pal, o) {
   // Komposit atas putih → RGB kerja (ditulis di tempat).
   for (let i = 0, p = 0; i < N; i++, p += 4) {
     const a = data[p + 3];
-    if (a < 255 && a >= 128 && !o.bgKey) {
+    if (a < 255 && a >= 128 && o.bgKey !== 'magenta') {
       const k = a / 255;
       data[p] = data[p] * k + 255 * (1 - k);
       data[p + 1] = data[p + 1] * k + 255 * (1 - k);

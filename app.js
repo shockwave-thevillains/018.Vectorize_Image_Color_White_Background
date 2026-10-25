@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610251231';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610251336';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -57,7 +57,7 @@ let seq = 0;
 
 function procOpts() {
   return {
-    bgKey: S.bgKey === 'magenta' ? 'magenta' : null,
+    bgKey: S.bgKey === 'magenta' || S.bgKey === 'none' ? S.bgKey : null, // 'none' = tidak ada yang dihapus
     keyTol: S.keyTol,
     mode: S.mode,
     silTones: S.silTones,
@@ -159,7 +159,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202610251231');
+  const w = new Worker('worker.js?v=202610251336');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -175,11 +175,11 @@ function spawn(slot) {
 for (let i = 0; i < POOL; i++) workers.push(spawn(i));
 
 // ---------------------------------------------------------------- AI (opsional)
-const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey !== 'magenta';
+const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === 'white';
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202610251231', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202610251336', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -323,7 +323,7 @@ const memId = (it) => `${it.name}|${it.srcW}x${it.srcH}`;
 
 // Catat keadaan akhir satu gambar (menggantikan catatan lama gambar yang sama).
 function remember(it) {
-  if (!S.learn || !it.result) return;
+  if (!S.learn || S.bgKey !== 'white' || !it.result) return;
   const id = memId(it), h = hiddenFor(it);
   memory = memory.filter((m) => m.id !== id);
   it.result.regions.forEach((r, i) => {
@@ -393,7 +393,7 @@ function regionAt(res, sx, sy) {
 function hiddenFor(it) {
   const res = it.result;
   const h = defaultHidden(res);
-  if (S.learn && it.learned) it.learned.forEach((v, i) => { if (v >= 0) h[i] = v; });
+  if (S.learn && S.bgKey === 'white' && it.learned) it.learned.forEach((v, i) => { if (v >= 0) h[i] = v; });
   res.regions.forEach((r, i) => { if (it.hide.has(r.k)) h[i] = 1; });
   for (const [sx, sy] of it.toggles) {
     const i = regionAt(res, sx, sy);
@@ -664,7 +664,7 @@ function renderViewer() {
     const hidden = hiddenFor(it);
     // Kandidat: area putih di dalam gambar (tidak menyentuh tepi) yang masih tampil.
     let cand = '';
-    if (S.bgKey !== 'magenta') res.regions.forEach((r, i) => { if (r.f && !r.f[1] && !hidden[i]) cand += regionPathCached(it, i); });
+    if (S.bgKey === 'white') res.regions.forEach((r, i) => { if (r.f && !r.f[1] && !hidden[i]) cand += regionPathCached(it, i); });
     vVec.innerHTML = `<g transform="${groupTransform(res)}">${previewMarkup(res, { stacking: S.stacking, recolor: it.recolor, hidden })}`
       + (cand ? `<path class="cand" d="${cand}"/>` : '') + '</g>';
     vOut.dataset.for = vLensOut.dataset.for = '';
