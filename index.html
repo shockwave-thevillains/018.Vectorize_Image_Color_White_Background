@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vektor — Batch Vectorizer</title>
+  <meta name="description" content="Ubah gambar raster menjadi SVG dan EPS secara batch, langsung di browser. Upscale 4×, buang latar putih, ukuran siap microstock.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23141414'/%3E%3Cpath d='M7 23C10 9 22 9 25 23' fill='none' stroke='%23ff5b14' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="./" aria-label="Vektor">
+      <svg viewBox="0 0 40 24" aria-hidden="true"><path d="M4 20C9 4 31 4 36 20" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 20 11 6M36 20 29 6" stroke="currentColor" stroke-width="1"/><rect x="2" y="18" width="4" height="4" fill="var(--accent)"/><rect x="34" y="18" width="4" height="4" fill="var(--accent)"/><circle cx="11" cy="6" r="1.8" fill="currentColor"/><circle cx="29" cy="6" r="1.8" fill="currentColor"/></svg>
+      <span>Vektor</span>
+    </a>
+    <p class="tag">Raster ke SVG &amp; EPS, banyak sekaligus. Semua diproses di browser Anda — tidak ada file yang diunggah.</p>
+    <button class="btn ghost" id="addBtn" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6"/></svg>
+      Tambah gambar
+    </button>
+    <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif" multiple hidden>
+  </header>
+
+  <main class="layout">
+    <section class="work">
+      <div class="viewer" id="viewer">
+        <div class="vbar">
+          <div class="seg" role="radiogroup" aria-label="Mode tampilan">
+            <button type="button" data-mode="compare" aria-pressed="false">Bandingkan</button>
+            <button type="button" data-mode="vector" aria-pressed="true">Vektor</button>
+            <button type="button" data-mode="outline" aria-pressed="false">Garis</button>
+          </div>
+          <div class="tools">
+            <button type="button" class="icon" data-act="zoomout" title="Perkecil (−)"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5 7h4M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.4"/></svg></button>
+            <button type="button" class="icon" data-act="zoomin" title="Perbesar (+)"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5 7h4M7 5v4M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.4"/></svg></button>
+            <button type="button" class="icon" data-act="fit" title="Pas layar (0)"><svg viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></button>
+            <button type="button" class="icon txt" data-act="one" title="Ukuran piksel asli (1)">1:1</button>
+            <button type="button" class="icon" data-act="lens" aria-pressed="true" title="Lensa piksel (L)"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6 5h1v1H6zM8 7h1v1H8zM6 9h1v1H6zM10 9h1v1h-1z" fill="currentColor"/></svg></button>
+            <span class="zoom mono" id="zoomLabel">100%</span>
+          </div>
+          <div class="vinfo mono" id="vinfo"></div>
+        </div>
+
+        <div class="stage" id="stage" tabindex="0" aria-label="Pratinjau">
+          <div class="layer full" id="vOrigWrap"><img class="orig" id="vOrig" alt="" draggable="false"></div>
+          <svg class="layer vec" id="vVec" xmlns="http://www.w3.org/2000/svg"></svg>
+          <svg class="layer out" id="vOut" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div class="layer lens" id="vLens" hidden>
+            <img class="orig" id="vLensImg" alt="" draggable="false">
+            <svg class="out" id="vLensOut" xmlns="http://www.w3.org/2000/svg"></svg>
+          </div>
+          <div class="ring" id="vRing" hidden></div>
+          <div class="split" id="vSplit" hidden><span>Asli</span><i></i><span>Vektor</span></div>
+          <div class="busy mono" id="vBusy" hidden></div>
+
+          <label class="drop" id="drop" for="fileInput">
+            <span class="drop-mark" aria-hidden="true">
+              <svg viewBox="0 0 120 64"><path d="M10 54C26 8 94 8 110 54" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 54 34 14M110 54 86 14" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/><rect x="5" y="49" width="10" height="10" fill="var(--accent)"/><rect x="105" y="49" width="10" height="10" fill="var(--accent)"/><circle cx="34" cy="14" r="3.5" fill="currentColor"/><circle cx="86" cy="14" r="3.5" fill="currentColor"/></svg>
+            </span>
+            <strong>Letakkan gambar di sini</strong>
+            <span>atau klik untuk memilih — PNG, JPG, WEBP. Bisa banyak file sekaligus.</span>
+          </label>
+        </div>
+
+        <div class="palette" id="palette" hidden>
+          <span class="plabel mono">Palet</span>
+          <div class="swatches" id="swatches"></div>
+          <span class="phint">Klik area di pratinjau untuk menghapus / mengembalikan</span>
+          <button type="button" class="btn ghost small" id="resetClicks" hidden>Reset klik</button>
+        </div>
+      </div>
+
+      <div class="queue">
+        <div class="qhead">
+          <h2>Antrean <span class="mono" id="qcount">0</span></h2>
+          <div class="qstat mono" id="qstat"></div>
+          <button class="btn ghost small" id="clearBtn" type="button" disabled>Kosongkan</button>
+        </div>
+        <ol class="rows" id="rows"></ol>
+      </div>
+    </section>
+
+    <aside class="panel" aria-label="Pengaturan">
+      <div class="panel-scroll">
+        <section class="group">
+          <h3><span class="n mono">01</span> Pemrosesan</h3>
+          <div class="field">
+            <div class="flabel">Upscale <em>sebelum tracing</em></div>
+            <div class="seg wide" data-opt="upscale">
+              <button type="button" data-v="1">1×</button>
+              <button type="button" data-v="2">2×</button>
+              <button type="button" data-v="3">3×</button>
+              <button type="button" data-v="4">4×</button>
+            </div>
+          </div>
+          <div class="field">
+            <div class="flabel">Jumlah warna maksimum</div>
+            <div class="row-inline">
+              <div class="seg" data-opt="colorAuto">
+                <button type="button" data-v="1">Otomatis</button>
+                <button type="button" data-v="0">Batas</button>
+              </div>
+              <input class="num mono" id="maxColors" type="number" min="2" max="64" step="1" value="12" aria-label="Jumlah warna maksimum">
+            </div>
+          </div>
+          <div class="field">
+            <label class="flabel" for="colorMerge">Kepekaan warna <output class="mono" for="colorMerge"></output></label>
+            <input type="range" id="colorMerge" data-opt="colorMerge" min="4" max="30" step="1">
+            <div class="scale mono"><span>banyak nuansa</span><span>sedikit warna</span></div>
+          </div>
+          <div class="field">
+            <label class="flabel" for="smooth">Kehalusan kurva <output class="mono" for="smooth"></output></label>
+            <input type="range" id="smooth" data-opt="smooth" min="0.15" max="1.2" step="0.05">
+            <div class="scale mono"><span>presisi</span><span>halus</span></div>
+          </div>
+          <div class="field">
+            <label class="flabel" for="minArea">Buang bintik &lt; <output class="mono" for="minArea"></output></label>
+            <input type="range" id="minArea" data-opt="minArea" min="0" max="80" step="1">
+          </div>
+          <div class="field">
+            <label class="flabel" for="corner">Sudut tajam ≥ <output class="mono" for="corner"></output></label>
+            <input type="range" id="corner" data-opt="corner" min="35" max="110" step="1">
+            <div class="scale mono"><span>lebih banyak sudut</span><span>lebih membulat</span></div>
+          </div>
+        </section>
+
+        <section class="group">
+          <h3><span class="n mono">02</span> Latar putih</h3>
+          <div class="field">
+            <div class="flabel">Jadikan transparan</div>
+            <div class="seg wide" data-opt="whiteMode">
+              <button type="button" data-v="off">Tidak</button>
+              <button type="button" data-v="outer">Luar</button>
+              <button type="button" data-v="smart">Pintar</button>
+              <button type="button" data-v="all">Semua</button>
+            </div>
+            <p class="note" id="whiteNote"></p>
+          </div>
+          <div class="field">
+            <label class="flabel" for="whiteTol">Toleransi putih <output class="mono" for="whiteTol"></output></label>
+            <input type="range" id="whiteTol" data-opt="whiteTol" min="2" max="30" step="1">
+          </div>
+        </section>
+
+        <section class="group">
+          <h3><span class="n mono">03</span> Ukuran output <span class="badge">Standar microstock</span></h3>
+          <div class="chips" data-opt="size">
+            <button type="button" data-v="15">15 MP <small>Minimal</small></button>
+            <button type="button" data-v="20">20 MP <small>HD</small></button>
+            <button type="button" data-v="25">25 MP <small>Adobe Stock</small></button>
+            <button type="button" data-v="30">30 MP <small>Ultra</small></button>
+            <button type="button" data-v="custom">Kustom <small>≥15 MP</small></button>
+            <button type="button" data-v="orig">Asli</button>
+          </div>
+          <div class="field" id="customField" hidden>
+            <label class="flabel" for="customMP">Megapiksel kustom</label>
+            <input class="num mono" id="customMP" type="number" min="15" max="100" step="0.5" value="15">
+          </div>
+          <p class="readout mono" id="sizeReadout">—</p>
+          <p class="note">Artboard dan koordinat kurva diskalakan, jadi hasilnya tetap tajam di ukuran berapa pun.</p>
+        </section>
+
+        <section class="group">
+          <h3><span class="n mono">04</span> Struktur</h3>
+          <div class="field">
+            <div class="flabel">Susunan bentuk</div>
+            <div class="seg wide" data-opt="stacking">
+              <button type="button" data-v="stacked">Tumpuk</button>
+              <button type="button" data-v="cutout">Potong</button>
+            </div>
+            <p class="note" id="stackNote"></p>
+          </div>
+          <label class="check"><input type="checkbox" data-opt="gapFill"><span><b>Pengisi celah</b><small>Garis tipis sewarna di bawah bentuk agar sambungan tidak tampak retak.</small></span></label>
+        </section>
+
+        <section class="group">
+          <h3><span class="n mono">05</span> Kode nama file</h3>
+          <p class="note">Pola: <code class="mono">[kode]_[urutan]_[nama_awal]</code></p>
+          <div class="row-inline">
+            <label class="input"><span>Kode</span><input class="mono" id="code" type="text" placeholder="mis. 011" autocomplete="off" spellcheck="false"></label>
+            <label class="input short"><span>Mulai</span><input class="mono" id="start" type="number" min="0" step="1" value="1"></label>
+          </div>
+          <p class="example" id="nameExample"></p>
+        </section>
+
+        <section class="group">
+          <h3><span class="n mono">06</span> Format unduhan</h3>
+          <div class="formats" role="radiogroup">
+            <label class="fmt"><input type="radio" name="format" value="both"><span class="ficon">ZIP</span><span><b>SVG + EPS</b><small>Folder <code>SVG/</code> dan <code>EPS/</code></small></span><em>Lengkap</em></label>
+            <label class="fmt"><input type="radio" name="format" value="svg"><span class="ficon">SVG</span><span><b>Hanya SVG</b><small>Format web</small></span></label>
+            <label class="fmt"><input type="radio" name="format" value="eps"><span class="ficon">EPS</span><span><b>Hanya EPS</b><small>EPS 10 · Illustrator / CorelDRAW</small></span></label>
+          </div>
+        </section>
+      </div>
+
+      <div class="panel-foot">
+        <div class="pstatus mono" id="pstatus">Belum ada gambar.</div>
+        <button class="btn primary" id="downloadBtn" type="button" disabled>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13h10" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+          <span>Unduh semua (.zip)</span>
+        </button>
+      </div>
+    </aside>
+  </main>
+
+  <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
+  <input type="color" id="colorPick" hidden>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
