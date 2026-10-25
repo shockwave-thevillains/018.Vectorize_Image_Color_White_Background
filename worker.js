@@ -362,6 +362,8 @@ function buildPalette(px, w, h, o) {
         if (vv < 1) continue;
         const t = ((c.L - a.L) * vx + (c.A - a.A) * vy + (c.B - a.B) * vz) / vv;
         if (t < 0.15 || t > 0.85) continue;
+        // Transisi antialias selalu jauh lebih sedikit daripada kedua warna pengapitnya.
+        if (c.n > 0.12 * Math.min(a.n, b.n)) continue;
         const d = Math.hypot(a.L + t * vx - c.L, a.A + t * vy - c.A, a.B + t * vz - c.B);
         if (d < md) mixed = true;
       }
