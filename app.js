@@ -15,6 +15,7 @@ const DEFAULTS = {
   corner: 70,
   whiteMode: 'smart',
   whiteTol: 10,
+  learn: true,
   size: '15',
   customMP: 15,
   stacking: 'stacked',
@@ -212,6 +213,7 @@ function onWorker(wk, msg) {
     it.key = job.key;
     it.outline = null;
     it.paths = new Map();
+    predictItem(it);
     if (prev) remapOverrides(it, prev.palette, msg.result.palette);
     updateRow(it);
     if (it.id === selId) { renderViewer(); refreshSize(); }
@@ -240,6 +242,82 @@ function remapOverrides(it, oldPal, newPal) {
   it.hide = hid;
 }
 
+// ---------------------------------------------------------------- belajar dari hasil akhir
+// Saat pengguna mengunduh, keadaan akhir tiap area putih (dihapus / tidak) disimpan
+// bersama sidiknya. Gambar berikutnya: k-tetangga terdekat menebak keputusan;
+// koreksi pengguna (beda dari bawaan) berbobot lebih besar. Hanya di browser ini.
+const LEARN_KEY = 'vektor.learn.v1';
+const LEARN_MAX = 4000;
+let memory = loadMemory();
+function loadMemory() {
+  try { const m = JSON.parse(localStorage.getItem(LEARN_KEY) || '[]'); return Array.isArray(m) ? m : []; } catch { return []; }
+}
+function saveMemory() {
+  try { localStorage.setItem(LEARN_KEY, JSON.stringify(memory)); } catch { /* penyimpanan penuh / privat */ }
+}
+const memId = (it) => `${it.name}|${it.srcW}x${it.srcH}`;
+
+// Catat keadaan akhir satu gambar (menggantikan catatan lama gambar yang sama).
+function remember(it) {
+  if (!S.learn || !it.result) return;
+  const id = memId(it), h = hiddenFor(it);
+  memory = memory.filter((m) => m.id !== id);
+  it.result.regions.forEach((r, i) => {
+    if (!r.f) return;
+    memory.push({ id, f: Array.from(r.f, (v) => Math.round(v * 1000) / 1000), y: h[i], c: h[i] !== (r.f[11] ? 1 : 0) ? 1 : 0 });
+  });
+  if (memory.length > LEARN_MAX) memory = memory.slice(memory.length - LEARN_MAX);
+  saveMemory();
+  // Gambar lain yang belum dikoreksi ikut memakai ingatan terbaru.
+  for (const x of items) if (x !== it && x.result && !x.toggles.length) predictItem(x);
+  if (selected()) renderViewer();
+  refreshLearn();
+}
+
+// Tebakan per region: -1 = ikut aturan bawaan, 0 = tampil, 1 = dihapus.
+function predictItem(it) {
+  const res = it.result;
+  it.learned = new Int8Array(res.regions.length).fill(-1);
+  const others = memory.filter((m) => m.id !== memId(it));
+  if (others.length < 5) return;
+  const K = 7;
+  res.regions.forEach((r, i) => {
+    if (!r.f) return;
+    const near = [];
+    for (const m of others) {
+      let d = 0;
+      for (let j = 0; j < 12; j++) { const t = m.f[j] - r.f[j]; d += t * t; }
+      d = Math.sqrt(d);
+      if (near.length < K) near.push([d, m]);
+      else if (d < near[K - 1][0]) near[K - 1] = [d, m];
+      else continue;
+      near.sort((p, q) => p[0] - q[0]);
+    }
+    if (!near.length || near[0][0] > 0.35) return; // tidak ada contoh yang mirip
+    let hide = 0, tot = 0;
+    for (const [d, m] of near) {
+      if (d > 0.6) continue;
+      const wgt = (m.c ? 3 : 1) / (d + 0.05);
+      tot += wgt;
+      if (m.y) hide += wgt;
+    }
+    if (!tot) return;
+    const p = hide / tot, def = r.f[11] ? 1 : 0;
+    const guess = p >= 0.7 ? 1 : p <= 0.3 ? 0 : -1;
+    if (guess >= 0 && guess !== def) it.learned[i] = guess;
+  });
+}
+const learnedCount = (it) => (it.learned ? it.learned.reduce((n, v) => n + (v >= 0 ? 1 : 0), 0) : 0);
+
+function refreshLearn() {
+  const imgs = new Set(memory.map((m) => m.id)).size;
+  const corr = memory.reduce((n, m) => n + m.c, 0);
+  $('#learnStat').textContent = memory.length
+    ? `${imgs} gambar diingat · ${corr} koreksi Anda · ${memory.length} contoh`
+    : 'Belum ada ingatan. Aplikasi mulai belajar setelah Anda mengunduh hasil.';
+  $('#forgetBtn').disabled = !memory.length;
+}
+
 // ---------------------------------------------------------------- region tersembunyi
 // Klik & sembunyikan warna bekerja langsung pada vektor yang sudah ada (instan).
 function regionAt(res, sx, sy) {
@@ -251,6 +329,7 @@ function regionAt(res, sx, sy) {
 function hiddenFor(it) {
   const res = it.result;
   const h = defaultHidden(res);
+  if (S.learn && it.learned) it.learned.forEach((v, i) => { if (v >= 0) h[i] = v; });
   res.regions.forEach((r, i) => { if (it.hide.has(r.k)) h[i] = 1; });
   for (const [sx, sy] of it.toggles) {
     const i = regionAt(res, sx, sy);
@@ -258,7 +337,7 @@ function hiddenFor(it) {
   }
   return h;
 }
-const visKey = (it) => `${it.id}:${it.key}:${it.toggles.length}:${[...it.hide].join(',')}`;
+const visKey = (it) => `${it.id}:${it.key}:${it.toggles.length}:${[...it.hide].join(',')}:${S.learn ? learnedCount(it) : 0}`;
 function editsChanged(it) {
   it.outline = null;
   updateRow(it);
@@ -512,7 +591,8 @@ function renderViewer() {
     vVec.innerHTML = `<g transform="${groupTransform(res)}">${previewMarkup(res, { stacking: S.stacking, recolor: it.recolor, hidden })}</g>`;
     vOut.dataset.for = vLensOut.dataset.for = '';
     const shapes = hidden.reduce((n, h) => n + (h ? 0 : 1), 0);
-    $('#vinfo').textContent = `${res.srcW}×${res.srcH} → proses ${res.W}×${res.H} · ${res.palette.length} warna · ${fmtInt(shapes)} bentuk · ${fmtInt(res.nodes)} segmen`;
+    const lc = S.learn ? learnedCount(it) : 0;
+    $('#vinfo').textContent = `${res.srcW}×${res.srcH} → proses ${res.W}×${res.H} · ${res.palette.length} warna · ${fmtInt(shapes)} bentuk · ${fmtInt(res.nodes)} segmen${lc ? ` · ${lc} dikoreksi dari ingatan` : ''}`;
     renderPalette(it);
   } else {
     vVec.innerHTML = '';
@@ -796,7 +876,7 @@ function changed(opt) {
     refreshStatus();
     return;
   }
-  if (opt === 'stacking') renderViewer();
+  if (opt === 'stacking' || opt === 'learn') { items.forEach((it) => { it.outline = null; }); renderViewer(); }
   items.forEach(updateRow);
   refreshName();
   refreshSize();
@@ -844,6 +924,7 @@ function downloadOne(it, kind) {
   const base = outName(it.stem, i, S.code, S.start);
   const o = exportOpts(it);
   const data = kind === 'svg' ? buildSVG(it.result, o) : buildEPS(it.result, o, base);
+  remember(it);
   saveBlob(new Blob([data], { type: kind === 'svg' ? 'image/svg+xml' : 'application/postscript' }), `${base}.${kind}`);
 }
 
@@ -874,6 +955,7 @@ async function downloadAll() {
       const o = exportOpts(it);
       if (S.format !== 'eps') files.push({ name: (both ? 'SVG/' : '') + base + '.svg', data: buildSVG(it.result, o) });
       if (S.format !== 'svg') files.push({ name: (both ? 'EPS/' : '') + base + '.eps', data: buildEPS(it.result, o, base) });
+      remember(it);
       st.textContent = `Menyusun file ${i + 1}/${items.length}…`;
       await new Promise((r) => setTimeout(r, 0));
     }
@@ -897,6 +979,15 @@ $('#clearBtn').addEventListener('click', () => {
 });
 $('#downloadBtn').addEventListener('click', downloadAll);
 $('#processBtn').addEventListener('click', processAll);
+$('#forgetBtn').addEventListener('click', () => {
+  if (!confirm('Hapus semua yang sudah dipelajari dari unduhan Anda?')) return;
+  memory = [];
+  saveMemory();
+  for (const it of items) if (it.result) predictItem(it);
+  items.forEach((it) => { it.outline = null; });
+  renderViewer();
+  refreshLearn();
+});
 
 const veil = $('#dropveil');
 let dragDepth = 0;
@@ -919,5 +1010,6 @@ window.addEventListener('paste', (e) => {
 // ---------------------------------------------------------------- mulai
 bindSettings();
 syncControls();
+refreshLearn();
 refreshAll();
 applyView();

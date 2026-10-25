@@ -492,3 +492,8 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius
   .vinfo { display: none; }
   .phint { display: none; }
 }
+
+.learn { margin-top: 6px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.learn .check { margin-bottom: 8px; }
+.learn-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.learn-row .mono { font-size: 11px; color: var(--muted); }

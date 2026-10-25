@@ -188,7 +188,12 @@ async function vectorize(file, o, progress) {
   }
   progress(0.55, 'region');
 
+  const feats = whiteFeatures(lab, W, H, comp, order, info, isWhite, pal, s);
   const out = traceAll(lab, comp, info, W, H, s, o, whiteK, (p) => progress(0.55 + p * 0.43, 'kurva'));
+  for (const [c, f] of feats) {
+    const r = out.compToReg[c];
+    if (r >= 0) out.regions[r].f = f;
+  }
 
   // Peta region beresolusi sumber (dikecilkan bila besar) untuk klik & sorot instan.
   const q = Math.min(1, Math.sqrt(2e6 / (sw * sh)));
@@ -949,6 +954,101 @@ function smartWhite(lab, W, comp, order, info, isWhite, removed, pal, s) {
     // Putih di depan elemen latar (mis. kepala robot di depan blob) = milik objek.
     if (all > 0 && objs.size >= 2 && objHits / all >= 0.6 && elemHits / all < 0.05) removed[c] = 1;
   }
+}
+
+// Sidik tiap area putih (untuk belajar dari hasil akhir pengguna). Semua nilai
+// ~0..1 dan tidak bergantung pada resolusi, jadi bisa dibandingkan antar gambar.
+//  0 luas (log)          1 menyentuh tepi gambar   2 kontak warna garis
+//  3 kontak warna latar  4 kontak transparan        5 kontak warna gelap lain
+//  6 jumlah objek di seberang garis   7 porsi objek   8 porsi elemen latar
+//  9 kepadatan kotak     10 rasio sisi kotak        11 keputusan bawaan (dihapus)
+function whiteFeatures(lab, W, H, comp, order, info, isWhite, pal, s) {
+  const N = W * H, n = info.count;
+  const feats = new Map();
+  const contact = new Float64Array(256);
+  for (let i = 0; i < N; i++) {
+    const x = i % W, a = lab[i];
+    const note = (b) => {
+      const wa = a !== T && isWhite[a], wb = b !== T && isWhite[b];
+      if (wa && !wb && b < HW) contact[b]++;
+      else if (wb && !wa && a < HW) contact[a]++;
+    };
+    if (x < W - 1) note(lab[i + 1]);
+    if (i < N - W) note(lab[i + W]);
+  }
+  let outline = -1, best = 0;
+  for (let l = 0; l < HW; l++) if (contact[l] > best) { best = contact[l]; outline = l; }
+  const ol = outline >= 0 ? pal[outline] : { L: 0, A: 0, B: 0 };
+  const cat = new Uint8Array(256); // 0 lain, 1 garis, 2 latar, 3 transparan, 4 putih
+  pal.forEach((p, k) => {
+    const dOl = Math.hypot(p.L - ol.L, p.A - ol.A, p.B - ol.B);
+    if (isWhite[k]) cat[k] = 4;
+    else if (k === outline || dOl < 25) cat[k] = 1; // varian warna garis (mis. dua navy dari JPEG)
+    else if (p.L >= 70 && Math.hypot(p.L - ol.L, p.A - ol.A, p.B - ol.B) > 30) cat[k] = 2;
+  });
+  cat[T] = 3; cat[HW] = 3;
+  const cnt = new Float64Array(n * 6);
+  for (let i = 0; i < N; i++) {
+    const c = comp[i], x = i % W;
+    const see = (q) => { const cq = comp[q]; if (cq === c) return; cnt[c * 6]++; cnt[c * 6 + 1 + cat[lab[q]]]++; };
+    if (x > 0) see(i - 1);
+    if (x < W - 1) see(i + 1);
+    if (i >= W) see(i - W);
+    if (i < N - W) see(i + W);
+  }
+  const isObj = (c) => {
+    const l = info.lbl[c];
+    return cat[l] === 0 || cat[l] === 2 ? cnt[c * 6] > 0 && cnt[c * 6 + 2] / cnt[c * 6] >= 0.8 : false;
+  };
+  const isLine = (l) => l < HW && cat[l] === 1;
+  const maxStep = Math.max(4, Math.round(4 * s));
+  const DXY = [1, -1, W, -W];
+  for (let c = 0; c < n; c++) {
+    const l = info.lbl[c];
+    if (l === T || !(l === HW || isWhite[l])) continue;
+    let x0 = W, y0 = H, x1 = 0, y1 = 0, objHits = 0, bgHits = 0, elemHits = 0;
+    const objs = new Set();
+    for (let h = info.start[c], e = h + info.size[c]; h < e; h++) {
+      const i = order[h], x = i % W, y = (i / W) | 0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (outline < 0) continue;
+      for (let d = 0; d < 4; d++) {
+        if ((d === 0 && x === W - 1) || (d === 1 && x === 0)) continue;
+        let j = i + DXY[d];
+        if (j < 0 || j >= N || !isLine(lab[j])) continue;
+        let k = 0;
+        while (k < maxStep && j >= 0 && j < N && isLine(lab[j])) {
+          const jx = j % W;
+          if ((d === 0 && jx === W - 1) || (d === 1 && jx === 0)) { j = -1; break; }
+          j += DXY[d]; k++;
+        }
+        if (j < 0 || j >= N) { bgHits++; continue; }
+        if (isLine(lab[j])) continue;
+        const q = comp[j], lq = lab[j];
+        if (cat[lq] === 3) bgHits++;
+        else if (cat[lq] === 4) continue;
+        else if (isObj(q)) { objHits++; objs.add(q); }
+        else { bgHits++; elemHits++; }
+      }
+    }
+    const tot = cnt[c * 6] || 1, all = objHits + bgHits || 1;
+    const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    feats.set(c, Float32Array.from([
+      Math.max(0, Math.min(1, (Math.log10(info.size[c] / N) + 6) / 6)),
+      info.border[c] ? 1 : 0,
+      cnt[c * 6 + 2] / tot,
+      cnt[c * 6 + 3] / tot,
+      cnt[c * 6 + 4] / tot,
+      cnt[c * 6 + 1] / tot,
+      Math.min(objs.size, 4) / 4,
+      objHits / all,
+      elemHits / all,
+      info.size[c] / (bw * bh),
+      Math.min(bw, bh) / Math.max(bw, bh),
+      l === HW ? 1 : 0,
+    ]));
+  }
+  return feats;
 }
 
 // ---------------------------------------------------------------- tracing

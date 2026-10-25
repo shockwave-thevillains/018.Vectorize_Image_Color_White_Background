@@ -16,6 +16,8 @@ jadi bisa di-host gratis di GitHub Pages.
   - *Pintar* (default): putih luar + putih terkurung yang termasuk latar (antara kaki, rangka kursi, dsb.). Putih milik objek tetap.
   - *Semua*: semua area putih.
   - Klik bentuk mana pun di pratinjau untuk menghapus/mengembalikannya, **langsung tanpa proses ulang** (bentuk disorot saat kursor di atasnya). Urungkan/ulangi: Ctrl+Z / Ctrl+Shift+Z.
+- **Belajar dari hasil akhir**: saat mengunduh, keadaan akhir tiap area putih (dihapus/tidak) dicatat bersama sidiknya (ukuran, kontak garis/latar, objek di seberang garis, bentuk). Gambar berikutnya dengan gaya serupa otomatis mengikuti (k-tetangga terdekat; koreksi Anda berbobot lebih). Klik coba-coba tidak dihitung. Tersimpan di browser ini saja; bisa dihapus dengan tombol *Lupakan*.
+- **Tombol Proses**: unggah dan ubah pengaturan tidak langsung memproses; klik *Proses* setelah selesai mengatur.
 - **Ukuran output microstock**: 15 / 20 / 25 / 30 MP, kustom (≥15 MP), atau asli. Artboard dan koordinat kurva diskalakan.
 - **Kode nama file**: `[kode]_[urutan]_[nama_awal]`, mis. `011_1_600_01_stencil_voids_emblem.svg`.
 - **Format unduhan**: SVG + EPS (`SVG/` dan `EPS/` dalam satu ZIP), hanya SVG, atau hanya EPS.
