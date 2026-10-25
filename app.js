@@ -1,11 +1,11 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610250804';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610250808';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
   mode: 'color',
   silTones: 'gray',
   silThreshold: 128,
-  cavity: 'smart',
+  cavity: 'white',
   upscale: 4,
   colorAuto: 1,
   maxColors: 12,
@@ -13,7 +13,7 @@ const DEFAULTS = {
   smooth: 0.8,
   minArea: 6,
   corner: 70,
-  whiteMode: 'smart',
+  whiteMode: 'outer',
   whiteTol: 10,
   learn: true,
   size: '15',
@@ -30,10 +30,17 @@ const GAP_WIDTH = 1.5; // px output
 
 const S = { ...DEFAULTS, ...loadSettings() };
 function loadSettings() {
-  try { return JSON.parse(localStorage.getItem('vektor.settings.v3') || '{}'); } catch { return {}; }
+  try {
+    const v4 = localStorage.getItem('vektor.settings.v4');
+    if (v4) return JSON.parse(v4);
+    // Pindah dari v3: pertahankan pengaturan lain, tapi latar putih kembali ke bawaan baru.
+    const old = JSON.parse(localStorage.getItem('vektor.settings.v3') || '{}');
+    delete old.whiteMode; delete old.cavity;
+    return old;
+  } catch { return {}; }
 }
 function saveSettings() {
-  try { localStorage.setItem('vektor.settings.v3', JSON.stringify(S)); } catch { /* mode privat */ }
+  try { localStorage.setItem('vektor.settings.v4', JSON.stringify(S)); } catch { /* mode privat */ }
 }
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -145,7 +152,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202610250804');
+  const w = new Worker('worker.js?v=202610250808');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -588,7 +595,11 @@ function renderViewer() {
   if (it.result) {
     const res = it.result;
     const hidden = hiddenFor(it);
-    vVec.innerHTML = `<g transform="${groupTransform(res)}">${previewMarkup(res, { stacking: S.stacking, recolor: it.recolor, hidden })}</g>`;
+    // Kandidat: area putih di dalam gambar (tidak menyentuh tepi) yang masih tampil.
+    let cand = '';
+    res.regions.forEach((r, i) => { if (r.f && !r.f[1] && !hidden[i]) cand += regionPathCached(it, i); });
+    vVec.innerHTML = `<g transform="${groupTransform(res)}">${previewMarkup(res, { stacking: S.stacking, recolor: it.recolor, hidden })}`
+      + (cand ? `<path class="cand" d="${cand}"/>` : '') + '</g>';
     vOut.dataset.for = vLensOut.dataset.for = '';
     const shapes = hidden.reduce((n, h) => n + (h ? 0 : 1), 0);
     const lc = S.learn ? learnedCount(it) : 0;
@@ -713,6 +724,11 @@ stage.addEventListener('pointermove', (e) => {
 
 // Sorot bentuk di bawah kursor (seperti vectorizer.ai); klik = hapus/kembalikan.
 const vHi = $('#vHi');
+function regionPathCached(it, i) {
+  let d = it.paths.get(i);
+  if (!d) { d = regionPath(it.result, i); it.paths.set(i, d); }
+  return d;
+}
 let hoverRegion = -2;
 function pointRegion() {
   const it = selected();
@@ -729,8 +745,7 @@ function updateHover() {
   hoverRegion = i;
   stage.classList.toggle('pick', i >= 0);
   if (i < 0) { vHi.innerHTML = ''; return; }
-  let d = it.paths.get(i);
-  if (!d) { d = regionPath(it.result, i); it.paths.set(i, d); }
+  const d = regionPathCached(it, i);
   vHi.innerHTML = `<g transform="${groupTransform(it.result)}"><path d="${d}"/></g>`;
 }
 const endDrag = () => { drag = null; stage.classList.remove('dragging'); };
@@ -854,15 +869,15 @@ function syncControls() {
   const keys = [S.mode, `${S.mode}:${S.silTones}`];
   $$('[data-show]').forEach((el) => { el.hidden = !el.dataset.show.split(' ').some((t) => keys.includes(t)); });
   $('#cavityNote').textContent = {
-    smart: 'Putih luar dan putih latar yang terkurung dihapus; putih di dalam objek (salju, detail) tetap.',
-    transparent: 'Semua putih menjadi transparan, termasuk rongga di dalam objek (bisa dikembalikan dengan klik).',
+    smart: 'Eksperimental: juga menebak putih terkurung yang termasuk latar. Bisa keliru — periksa hasilnya.',
+    transparent: 'Semua putih menjadi transparan, termasuk di dalam objek (bisa dikembalikan dengan klik).',
     fill: 'Siluet padat: rongga di dalam objek diisi warna siluet.',
-    white: 'Rongga di dalam objek tetap putih.',
+    white: 'Hanya putih luar yang dihapus; putih di dalam (garis putus-putus) klik untuk menghapus.',
   }[S.cavity] || '';
   $('#whiteNote').textContent = {
     off: 'Latar putih dipertahankan.',
-    outer: 'Hanya putih yang tersambung ke tepi gambar.',
-    smart: 'Putih luar, plus putih terkurung yang termasuk latar (antara kaki, layar, rangka). Putih milik objek tetap.',
+    outer: 'Hanya putih yang tersambung ke tepi gambar. Putih di dalam (garis putus-putus) klik untuk menghapus.',
+    smart: 'Eksperimental: juga menebak putih terkurung yang termasuk latar. Bisa keliru — periksa hasilnya.',
     all: 'Semua area putih, termasuk di dalam objek.',
   }[S.whiteMode] || '';
 }

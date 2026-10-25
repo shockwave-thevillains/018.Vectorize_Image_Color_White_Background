@@ -183,6 +183,7 @@ svg { display: block; }
 .layer { position: absolute; left: 0; top: 0; }
 .layer.full { inset: 0; overflow: hidden; pointer-events: none; }
 .stage > svg.layer { width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.layer.vec path.cand { fill: none; stroke: #ff5b14; stroke-width: 1.5; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; pointer-events: none; }
 .layer.hi path { fill: rgb(25 227 255 / 0.22); stroke: #19e3ff; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .stage.pick:not(.dragging) { cursor: pointer; }
 img.orig { position: absolute; left: 0; top: 0; transform-origin: 0 0; image-rendering: pixelated; max-width: none; pointer-events: none; }
