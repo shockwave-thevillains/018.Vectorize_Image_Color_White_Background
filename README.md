@@ -13,7 +13,9 @@ jadi bisa di-host gratis di GitHub Pages.
 - **Upscale sebelum tracing** (default 4×) agar batas warna jatuh di posisi sub-piksel.
 - **Latar putih → transparan**
   - *Luar*: hanya putih yang tersambung ke tepi gambar (dengan penutup celah garis, jadi tidak bocor ke dalam objek).
-  - *Pintar* (default): putih luar + putih terkurung yang termasuk latar (antara kaki, rangka kursi, dsb.). Putih milik objek tetap.
+  - *Luar* (bawaan): hanya putih yang tersambung ke tepi; putih di dalam ditandai garis putus-putus untuk diklik.
+  - *AI*: putih luar + putih di dalam yang dinilai latar oleh model ISNet ilustrasi (44 MB, diunduh sekali, ±10 detik/gambar, khusus mode Warna). Lihat `THIRD_PARTY.md`.
+  - *Pintar* (eksperimental): putih luar + putih terkurung yang termasuk latar (antara kaki, rangka kursi, dsb.). Putih milik objek tetap.
   - *Semua*: semua area putih.
   - Klik bentuk mana pun di pratinjau untuk menghapus/mengembalikannya, **langsung tanpa proses ulang** (bentuk disorot saat kursor di atasnya). Urungkan/ulangi: Ctrl+Z / Ctrl+Shift+Z.
 - **Belajar dari hasil akhir**: saat mengunduh, keadaan akhir tiap area putih (dihapus/tidak) dicatat bersama sidiknya (ukuran, kontak garis/latar, objek di seberang garis, bentuk). Gambar berikutnya dengan gaya serupa otomatis mengikuti (k-tetangga terdekat; koreksi Anda berbobot lebih). Klik coba-coba tidak dihitung. Tersimpan di browser ini saja; bisa dihapus dengan tombol *Lupakan*.
@@ -68,5 +70,6 @@ JavaScript lama dari cache GitHub Pages. Saat mengubah file, perbarui angka vers
 | `app.js` | Antrean, worker pool, penampil, panel pengaturan, unduhan |
 | `worker.js` | Mesin tracing (palet, upscale, label, tracing, fitting) |
 | `export.js` | Penyusun SVG/EPS dan penulis ZIP (tanpa dependensi) |
+| `ai-worker.js` | Penilai objek/latar AI (onnxruntime-web + model di `models/`) |
 
 Browser yang didukung: Chrome/Edge 103+, Firefox 113+, Safari 16.4+.

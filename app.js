@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610250808';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610250815';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -75,6 +75,7 @@ const isCurrent = (it) => it.result && it.key === keyOf(it);
 
 function statusOf(it) {
   if (it.inflight) return 'working';
+  if (it.aiBusy) return 'ai';
   if (it.error && it.errKey === keyOf(it)) return 'error';
   if (isCurrent(it)) return 'done';
   if (it.want) return 'queued';
@@ -116,6 +117,8 @@ async function addFiles(fileList) {
       recolor: {},
       outline: null,
       paths: new Map(),
+      aiMask: null, // peta objek/latar dari AI (1024², sekali per gambar)
+      aiBusy: false,
     };
     items.push(it);
     createRow(it);
@@ -152,7 +155,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202610250808');
+  const w = new Worker('worker.js?v=202610250815');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -167,8 +170,55 @@ function spawn(slot) {
 }
 for (let i = 0; i < POOL; i++) workers.push(spawn(i));
 
+// ---------------------------------------------------------------- AI (opsional)
+const needAI = () => S.mode === 'color' && S.whiteMode === 'ai';
+let aiWorker = null, aiJob = null, aiState = '';
+function aiStart() {
+  if (aiWorker) return;
+  aiWorker = new Worker('ai-worker.js?v=202610250815', { type: 'module' });
+  aiWorker.onmessage = (e) => {
+    const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
+    if (m.type === 'progress') {
+      aiState = m.stage === 'download' ? `Mengunduh model AI (sekali saja) ${(m.got / 1e6).toFixed(0)}/${(m.total / 1e6).toFixed(0)} MB`
+        : m.stage === 'init' ? 'Menyiapkan model AI…' : 'AI menganalisis objek & latar…';
+      if (it) updateRow(it);
+      renderBusy();
+      return;
+    }
+    aiJob = null;
+    aiState = '';
+    if (it) {
+      it.aiBusy = false;
+      if (m.type === 'done') it.aiMask = m.mask;
+      else { it.want = false; it.error = `AI gagal: ${m.message}`; it.errKey = keyOf(it); }
+      updateRow(it);
+    }
+    renderBusy();
+    schedule();
+  };
+  aiWorker.onerror = (e) => {
+    e.preventDefault?.();
+    const it = aiJob && items.find((x) => x.id === aiJob);
+    aiWorker.terminate(); aiWorker = null; aiJob = null; aiState = '';
+    if (it) { it.aiBusy = false; it.want = false; it.error = 'AI tidak bisa dijalankan di browser ini.'; it.errKey = keyOf(it); updateRow(it); }
+    schedule();
+  };
+}
+function aiSchedule() {
+  if (!needAI() || aiJob) return;
+  const sel = items.find((x) => x.id === selId);
+  const cand = (it) => it.want && needsWork(it) && !it.aiMask && !it.aiBusy;
+  const it = sel && cand(sel) ? sel : items.find(cand);
+  if (!it) return;
+  aiStart();
+  aiJob = it.id;
+  it.aiBusy = true;
+  updateRow(it);
+  aiWorker.postMessage({ id: it.id, file: it.file });
+}
+
 function nextItem() {
-  const want = (it) => it.want && needsWork(it);
+  const want = (it) => it.want && needsWork(it) && (!needAI() || it.aiMask);
   const sel = items.find((x) => x.id === selId);
   if (sel && want(sel)) return sel;
   return items.find(want);
@@ -184,9 +234,12 @@ function schedule() {
     it.want = false;
     it.progress = 0;
     wk.job = { id: it.id, key };
-    wk.w.postMessage({ id: it.id, file: it.file, opts: procOpts() });
+    const msg = { id: it.id, file: it.file, opts: procOpts() };
+    if (needAI() && it.aiMask) msg.aiMask = it.aiMask.slice();
+    wk.w.postMessage(msg);
     updateRow(it);
   }
+  aiSchedule();
   refreshStatus();
 }
 
@@ -393,7 +446,7 @@ function createRow(it) {
   rowEls.set(it.id, li);
 }
 
-const STATUS_TEXT = { idle: 'Belum diproses', queued: 'Antre', working: 'Memproses', done: 'Selesai', stale: 'Perlu diperbarui', error: 'Gagal' };
+const STATUS_TEXT = { ai: 'Analisis AI', idle: 'Belum diproses', queued: 'Antre', working: 'Memproses', done: 'Selesai', stale: 'Perlu diperbarui', error: 'Gagal' };
 
 function updateRow(it) {
   const li = rowEls.get(it.id);
@@ -618,7 +671,8 @@ function renderBusy() {
   const it = selected();
   if (!it) { vBusy.hidden = true; return; }
   const st = statusOf(it);
-  if (st === 'working') { vBusy.hidden = false; vBusy.textContent = `Memproses… ${Math.round(it.progress * 100)}%`; }
+  if (st === 'ai') { vBusy.hidden = false; vBusy.textContent = aiState || 'Menunggu AI…'; }
+  else if (st === 'working') { vBusy.hidden = false; vBusy.textContent = `Memproses… ${Math.round(it.progress * 100)}%`; }
   else if (st === 'queued') { vBusy.hidden = false; vBusy.textContent = 'Dalam antrean…'; }
   else if (st === 'idle') { vBusy.hidden = false; vBusy.textContent = 'Atur pengaturan bila perlu, lalu klik Proses.'; }
   else if (st === 'stale') { vBusy.hidden = false; vBusy.textContent = 'Pengaturan berubah — klik Proses untuk memperbarui. (Pratinjau: hasil sebelumnya)'; }
@@ -877,6 +931,7 @@ function syncControls() {
   $('#whiteNote').textContent = {
     off: 'Latar putih dipertahankan.',
     outer: 'Hanya putih yang tersambung ke tepi gambar. Putih di dalam (garis putus-putus) klik untuk menghapus.',
+    ai: 'Putih luar + putih di dalam yang dinilai latar oleh AI (model 44 MB, diunduh sekali; ±10 dtk per gambar). Khusus ilustrasi berwarna.',
     smart: 'Eksperimental: juga menebak putih terkurung yang termasuk latar. Bisa keliru — periksa hasilnya.',
     all: 'Semua area putih, termasuk di dalam objek.',
   }[S.whiteMode] || '';

@@ -40,10 +40,10 @@ const tmpLab = new Float32Array(3);
 
 // ---------------------------------------------------------------- pesan
 self.onmessage = async (e) => {
-  const { id, file, opts } = e.data;
+  const { id, file, opts, aiMask } = e.data;
   const progress = (p, stage) => self.postMessage({ id, type: 'progress', p, stage });
   try {
-    const result = await vectorize(file, opts, progress);
+    const result = await vectorize(file, opts, progress, aiMask);
     const transfer = [];
     for (const ch of result.chains) transfer.push(ch.p.buffer, ch.c.buffer);
     transfer.push(result.rmap.buffer);
@@ -54,7 +54,7 @@ self.onmessage = async (e) => {
 };
 
 // ---------------------------------------------------------------- utama
-async function vectorize(file, o, progress) {
+async function vectorize(file, o, progress, aiMask) {
   const bmp = await createImageBitmap(file);
   const sw = bmp.width, sh = bmp.height;
 
@@ -139,7 +139,9 @@ async function vectorize(file, o, progress) {
   // Warna putih utama (untuk bentuk latar yang disembunyikan).
   let whiteK = -1;
   pal.forEach((p, k) => { if (isWhite[k] && (whiteK < 0 || p.n > pal[whiteK].n)) whiteK = k; });
-  const mode = sil ? (o.cavity === 'transparent' ? 'all' : o.cavity === 'smart' ? 'smart' : 'outer') : o.whiteMode || 'smart';
+  let mode = sil ? (o.cavity === 'transparent' ? 'all' : o.cavity === 'smart' ? 'smart' : 'outer') : o.whiteMode || 'outer';
+  const useAI = mode === 'ai' && aiMask;
+  if (mode === 'ai') mode = 'outer';
   if (whiteK >= 0) {
     if (mode === 'all') {
       for (let i = 0; i < N; i++) if (lab[i] !== T && isWhite[lab[i]]) lab[i] = HW;
@@ -150,6 +152,28 @@ async function vectorize(file, o, progress) {
 
   // Komponen; putih latar terkurung (mode pintar) ikut ditandai HW.
   let info = label(lab, W, H, comp, order);
+  // AI: putih di dalam gambar yang dinilai latar oleh model (rata-rata < 0,3) ikut dihapus.
+  if (useAI && whiteK >= 0) {
+    const S = 1024, sx = S / W, sy = S / H;
+    let any = false;
+    for (let c = 0; c < info.count; c++) {
+      const l = info.lbl[c];
+      if (l === T || l === HW || !isWhite[l] || info.border[c]) continue;
+      let sum = 0, n = 0;
+      const step = Math.max(1, Math.floor(info.size[c] / 4000));
+      for (let h = info.start[c], e = h + info.size[c]; h < e; h += step) {
+        const i = order[h];
+        sum += aiMask[Math.min(S - 1, ((i / W) | 0) * sy | 0) * S + Math.min(S - 1, (i % W) * sx | 0)];
+        n++;
+      }
+      if (n && sum / n < 0.3 * 255) {
+        any = true;
+        for (let h = info.start[c], e = h + info.size[c]; h < e; h++) lab[order[h]] = HW;
+      }
+    }
+    if (any) info = label(lab, W, H, comp, order);
+  }
+
   // Siluet padat: rongga putih di dalam objek diisi warna siluet.
   // Rongga putih diisi warna tetangga terbanyak (hitam / abu-abu di sekelilingnya).
   if (sil && o.cavity === 'fill') {
