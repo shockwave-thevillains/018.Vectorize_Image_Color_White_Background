@@ -704,9 +704,9 @@ function traceAll(lab, comp, info, W, H, s, o, progress) {
   const chains = [];
   const map = new Map();
   let nodes = 0;
-  const addChain = (geo, inner) => {
-    chains.push({ p: geo.p, c: geo.c, inner });
-    nodes += geo.c.length;
+  // Rantai dikumpulkan dulu (raw), di-fit setelah titik pertemuan dirapikan.
+  const addChain = (raw, inner) => {
+    chains.push({ raw, inner });
     return chains.length - 1;
   };
   const innerOf = (va, vb) => {
@@ -757,7 +757,7 @@ function traceAll(lab, comp, info, W, H, s, o, progress) {
         const e = map.get(key);
         if (e) refs.push(e.idx * 2 + (e.next === nxt ? 0 : 1));
         else {
-          const idx = addChain(fitter.closed(V), innerOf(V[0], V[1 % n]));
+          const idx = addChain({ closed: V }, innerOf(V[0], V[1 % n]));
           map.set(key, { idx, next: nxt });
           refs.push(idx * 2);
         }
@@ -776,7 +776,7 @@ function traceAll(lab, comp, info, W, H, s, o, progress) {
           const e = map.get(key);
           if (e) refs.push(e.idx * 2 + (e.start === seq[0] && e.first === k0 ? 0 : 1));
           else {
-            const idx = addChain(fitter.open(seq), innerOf(seq[0], seq[1]));
+            const idx = addChain({ open: seq }, innerOf(seq[0], seq[1]));
             map.set(key, { idx, start: seq[0], first: k0 });
             refs.push(idx * 2);
           }
@@ -789,8 +789,49 @@ function traceAll(lab, comp, info, W, H, s, o, progress) {
       subs.push({ refs: Int32Array.from(refs), outer, fill });
     }
     regions.push({ k: info.lbl[c], area: outerA, subs });
-    if (++doneComps % 64 === 0) progress(0.15 + 0.85 * (doneComps / totalComps));
+    if (++doneComps % 64 === 0) progress(0.15 + 0.25 * (doneComps / totalComps));
   }
+  // Rapikan titik pertemuan (≥3 region): geser ke rata-rata titik di dekat ujung
+  // semua rantai yang bertemu di sana, agar tidak terkunci di sudut piksel yang
+  // bergerigi. Titik di tepi gambar tetap.
+  const m = Math.max(2, Math.round(1.5 * s));
+  const jsum = new Map();
+  const acc = (v, x, y) => {
+    let e = jsum.get(v);
+    if (!e) jsum.set(v, (e = [v % W1, (v / W1) | 0, 1]));
+    e[0] += x; e[1] += y; e[2]++;
+  };
+  const endAvg = (seq, fromEnd) => {
+    const n = seq.length, k = Math.min(m, n - 1);
+    let sx = 0, sy = 0;
+    for (let t = 0; t < k; t++) {
+      const i = fromEnd ? n - 2 - t : t, a = seq[i], b = seq[i + 1];
+      sx += ((a % W1) + (b % W1)) / 2;
+      sy += (((a / W1) | 0) + ((b / W1) | 0)) / 2;
+    }
+    return [sx / k, sy / k];
+  };
+  for (const ch of chains) {
+    const seq = ch.raw.open;
+    if (!seq) continue;
+    const a = endAvg(seq, false), b = endAvg(seq, true);
+    acc(seq[0], a[0], a[1]);
+    acc(seq[seq.length - 1], b[0], b[1]);
+  }
+  const jpos = (v) => {
+    const x = v % W1, y = (v / W1) | 0;
+    if (x === 0 || y === 0 || x === W || y === H) return [x, y];
+    const e = jsum.get(v);
+    return [e[0] / e[2], e[1] / e[2]];
+  };
+  chains.forEach((ch, i) => {
+    const seq = ch.raw.open;
+    const geo = seq ? fitter.open(seq, jpos(seq[0]), jpos(seq[seq.length - 1])) : fitter.closed(ch.raw.closed);
+    ch.p = geo.p; ch.c = geo.c;
+    delete ch.raw;
+    nodes += geo.c.length;
+    if (i % 256 === 0) progress(0.4 + 0.6 * (i / chains.length));
+  });
   regions.sort((a, b) => b.area - a.area);
   return { chains, regions, nodes };
 }
@@ -838,15 +879,15 @@ function makeFitter(W1, s, o) {
 
   const vx = (v) => v % W1, vy = (v) => (v / W1) | 0;
 
-  function open(seq) {
+  function open(seq, A, B) {
     const n = seq.length;
     const P = new Float64Array((n + 1) * 2);
-    P[0] = vx(seq[0]); P[1] = vy(seq[0]);
+    P[0] = A[0]; P[1] = A[1];
     for (let i = 0; i < n - 1; i++) {
       P[(i + 1) * 2] = (vx(seq[i]) + vx(seq[i + 1])) / 2;
       P[(i + 1) * 2 + 1] = (vy(seq[i]) + vy(seq[i + 1])) / 2;
     }
-    P[n * 2] = vx(seq[n - 1]); P[n * 2 + 1] = vy(seq[n - 1]);
+    P[n * 2] = B[0]; P[n * 2 + 1] = B[1];
     return processOpen(P, n + 1);
   }
 
@@ -940,16 +981,23 @@ function makeFitter(W1, s, o) {
   function corners(Q, n, closedPath) {
     const k = closedPath ? Math.min(K, Math.max(1, (n - 1) >> 1)) : K;
     if (n < 5) return [];
-    const ang = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      if (!closedPath && (i === 0 || i === n - 1)) continue;
-      const im = closedPath ? (i - k + n * 4) % n : Math.max(0, i - k);
-      const ip = closedPath ? (i + k) % n : Math.min(n - 1, i + k);
+    // Sudut belok di titik i dengan jendela ±w.
+    const turn = (i, w) => {
+      const im = closedPath ? (i - w + n * 4) % n : Math.max(0, i - w);
+      const ip = closedPath ? (i + w) % n : Math.min(n - 1, i + w);
       const ax = Q[i * 2] - Q[im * 2], ay = Q[i * 2 + 1] - Q[im * 2 + 1];
       const bx = Q[ip * 2] - Q[i * 2], by = Q[ip * 2 + 1] - Q[i * 2 + 1];
       const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
-      if (la < 1e-9 || lb < 1e-9) continue;
-      ang[i] = Math.acos(Math.max(-1, Math.min(1, (ax * bx + ay * by) / (la * lb))));
+      if (la < 1e-9 || lb < 1e-9) return 0;
+      return Math.acos(Math.max(-1, Math.min(1, (ax * bx + ay * by) / (la * lb))));
+    };
+    const k2 = closedPath ? Math.min(2 * k, Math.max(1, (n - 1) >> 1)) : 2 * k;
+    const ang = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      if (!closedPath && (i === 0 || i === n - 1)) continue;
+      const a = turn(i, k);
+      // Sudut sejati tetap tajam di jendela 2×; gelombang kecil tidak.
+      if (a >= cornerThr && turn(i, k2) >= cornerThr * 0.8) ang[i] = a;
     }
     const res = [];
     for (let i = 0; i < n; i++) {
