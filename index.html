@@ -101,6 +101,13 @@
             </div>
           </div>
           <div class="field" data-show="silhouette">
+            <div class="flabel">Nada</div>
+            <div class="seg wide" data-opt="silTones">
+              <button type="button" data-v="gray">Hitam + abu-abu</button>
+              <button type="button" data-v="binary">Hitam saja</button>
+            </div>
+          </div>
+          <div class="field" data-show="silhouette:binary">
             <label class="flabel" for="silThreshold">Ambang gelap/terang <output class="mono" for="silThreshold"></output></label>
             <input type="range" id="silThreshold" data-opt="silThreshold" min="30" max="230" step="1">
             <div class="scale mono"><span>siluet lebih tipis</span><span>lebih tebal</span></div>
@@ -150,6 +157,7 @@
           <div class="field" data-show="silhouette">
             <div class="flabel">Rongga di dalam siluet</div>
             <div class="seg wide" data-opt="cavity">
+              <button type="button" data-v="smart">Pintar</button>
               <button type="button" data-v="transparent">Transparan</button>
               <button type="button" data-v="fill">Isi</button>
               <button type="button" data-v="white">Putih</button>
@@ -166,7 +174,7 @@
             </div>
             <p class="note" id="whiteNote"></p>
           </div>
-          <div class="field" data-show="color">
+          <div class="field" data-show="color silhouette:gray">
             <label class="flabel" for="whiteTol">Toleransi putih <output class="mono" for="whiteTol"></output></label>
             <input type="range" id="whiteTol" data-opt="whiteTol" min="2" max="30" step="1">
           </div>

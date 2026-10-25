@@ -3,8 +3,9 @@ import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outline
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
   mode: 'color',
+  silTones: 'gray',
   silThreshold: 128,
-  cavity: 'transparent',
+  cavity: 'smart',
   upscale: 4,
   colorAuto: 1,
   maxColors: 12,
@@ -22,7 +23,7 @@ const DEFAULTS = {
   start: 1,
   format: 'both',
 };
-const PROC = ['mode', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
+const PROC = ['mode', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
 const MAX_WORK = 4096 * 4096;
 const GAP_WIDTH = 1.5; // px output
 
@@ -47,6 +48,7 @@ let seq = 0;
 function procOpts() {
   return {
     mode: S.mode,
+    silTones: S.silTones,
     silThreshold: S.silThreshold,
     cavity: S.cavity,
     upscale: S.upscale,
@@ -752,9 +754,11 @@ function syncControls() {
   $('#stackNote').textContent = S.stacking === 'stacked'
     ? 'Bentuk ditumpuk dari belakang ke depan — tanpa retak di bentuk bersarang, mudah diedit.'
     : 'Bentuk saling memotong tanpa tumpang tindih — cocok untuk cutting plotter dan sablon.';
-  $$('[data-show]').forEach((el) => { el.hidden = el.dataset.show !== S.mode; });
+  const keys = [S.mode, `${S.mode}:${S.silTones}`];
+  $$('[data-show]').forEach((el) => { el.hidden = !el.dataset.show.split(' ').some((t) => keys.includes(t)); });
   $('#cavityNote').textContent = {
-    transparent: 'Rongga di dalam siluet menjadi transparan (bisa dikembalikan dengan klik).',
+    smart: 'Putih luar dan putih latar yang terkurung dihapus; putih di dalam objek (salju, detail) tetap.',
+    transparent: 'Semua putih menjadi transparan, termasuk rongga di dalam objek (bisa dikembalikan dengan klik).',
     fill: 'Siluet padat: rongga di dalam objek diisi warna siluet.',
     white: 'Rongga di dalam objek tetap putih.',
   }[S.cavity] || '';

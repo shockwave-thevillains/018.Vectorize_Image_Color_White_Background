@@ -65,9 +65,32 @@ async function vectorize(file, o, progress) {
 
   // Mode siluet: 2 warna tetap (hitam pekat + putih), ambang luminans.
   const sil = o.mode === 'silhouette';
-  const pal = sil
+  const binary = sil && o.silTones === 'binary';
+  // Siluet bernada: gambar dijadikan abu-abu dulu (noise warna JPEG hilang),
+  // lalu hitam dan setiap tingkat abu-abu menjadi warna palet sendiri.
+  const orig = sil && !binary ? new Uint8ClampedArray(src) : null;
+  if (sil && !binary) {
+    for (let p = 0; p < src.length; p += 4) {
+      const y = Math.round(0.299 * src[p] + 0.587 * src[p + 1] + 0.114 * src[p + 2]);
+      src[p] = src[p + 1] = src[p + 2] = y;
+    }
+    g0.putImageData(new ImageData(src, sw, sh), 0, 0);
+  }
+  const pal = binary
     ? [{ r: 0, g: 0, b: 0, L: 0, A: 0, B: 0, n: 2 }, { r: 255, g: 255, b: 255, L: 100, A: 0, B: 0, n: 1 }]
     : buildPalette(src, sw, sh, o);
+  // Siluet bernada: warna output = rata-rata warna asli piksel dengan tingkat abu-abu itu.
+  if (orig) {
+    for (const p of pal) {
+      const g = Math.round(0.299 * p.r + 0.587 * p.g + 0.114 * p.b);
+      let n = 0, r = 0, gg = 0, b = 0;
+      for (let q = 0; q < src.length; q += 4) {
+        if (Math.abs(src[q] - g) > 6) continue;
+        n++; r += orig[q]; gg += orig[q + 1]; b += orig[q + 2];
+      }
+      if (n) { p.r = clamp255(r / n); p.g = clamp255(gg / n); p.b = clamp255(b / n); }
+    }
+  }
   progress(0.06, 'palet');
 
   // Penghalusan searah garis pada resolusi sumber, lalu upscale dari hasilnya.
@@ -116,7 +139,7 @@ async function vectorize(file, o, progress) {
   // Warna putih utama (untuk bentuk latar yang disembunyikan).
   let whiteK = -1;
   pal.forEach((p, k) => { if (isWhite[k] && (whiteK < 0 || p.n > pal[whiteK].n)) whiteK = k; });
-  const mode = sil ? (o.cavity === 'transparent' ? 'all' : 'outer') : o.whiteMode || 'smart';
+  const mode = sil ? (o.cavity === 'transparent' ? 'all' : o.cavity === 'smart' ? 'smart' : 'outer') : o.whiteMode || 'smart';
   if (whiteK >= 0) {
     if (mode === 'all') {
       for (let i = 0; i < N; i++) if (lab[i] !== T && isWhite[lab[i]]) lab[i] = HW;
@@ -128,12 +151,27 @@ async function vectorize(file, o, progress) {
   // Komponen; putih latar terkurung (mode pintar) ikut ditandai HW.
   let info = label(lab, W, H, comp, order);
   // Siluet padat: rongga putih di dalam objek diisi warna siluet.
+  // Rongga putih diisi warna tetangga terbanyak (hitam / abu-abu di sekelilingnya).
   if (sil && o.cavity === 'fill') {
     let any = false;
+    const votes = new Int32Array(256);
     for (let c = 0; c < info.count; c++) {
-      if (info.lbl[c] !== 1) continue;
+      const l = info.lbl[c];
+      if (l === T || l === HW || !isWhite[l]) continue;
+      votes.fill(0);
+      for (let h = info.start[c], e = h + info.size[c]; h < e; h++) {
+        const i = order[h], x = i % W;
+        const see = (q) => { const lq = lab[q]; if (lq < HW && !isWhite[lq]) votes[lq]++; };
+        if (x > 0) see(i - 1);
+        if (x < W - 1) see(i + 1);
+        if (i >= W) see(i - W);
+        if (i < N - W) see(i + W);
+      }
+      let best = -1, bv = 0;
+      for (let k = 0; k < HW; k++) if (votes[k] > bv) { bv = votes[k]; best = k; }
+      if (best < 0) continue;
       any = true;
-      for (let h = info.start[c], e = h + info.size[c]; h < e; h++) lab[order[h]] = 0;
+      for (let h = info.start[c], e = h + info.size[c]; h < e; h++) lab[order[h]] = best;
     }
     if (any) info = label(lab, W, H, comp, order);
   }
@@ -304,6 +342,28 @@ function buildPalette(px, w, h, o) {
     P.splice(b, 1);
   }
 
+  // Buang warna "campuran": porsi kecil dan berada di antara dua warna lain
+  // (piksel transisi antialias, mis. abu-abu di tepi hitam–putih).
+  const totalN = P.reduce((t, p) => t + p.n, 0);
+  for (let k = P.length - 1; k >= 0 && P.length > 2; k--) {
+    const c = P[k];
+    if (c.n > totalN * 0.02) continue;
+    let mixed = false;
+    for (let i = 0; i < P.length && !mixed; i++) {
+      for (let j = i + 1; j < P.length && !mixed; j++) {
+        if (i === k || j === k) continue;
+        const a = P[i], b = P[j];
+        const vx = b.L - a.L, vy = b.A - a.A, vz = b.B - a.B, vv = vx * vx + vy * vy + vz * vz;
+        if (vv < 1) continue;
+        const t = ((c.L - a.L) * vx + (c.A - a.A) * vy + (c.B - a.B) * vz) / vv;
+        if (t < 0.15 || t > 0.85) continue;
+        const d = Math.hypot(a.L + t * vx - c.L, a.A + t * vy - c.A, a.B + t * vz - c.B);
+        if (d < md) mixed = true;
+      }
+    }
+    if (mixed) P.splice(k, 1);
+  }
+
   // Urutkan dari paling dominan; warna final dari rata-rata RGB, Lab dihitung ulang.
   P.sort((a, b) => b.n - a.n);
   return P.slice(0, 250).map((p) => {
@@ -365,7 +425,7 @@ function assignLabels(data, W, H, s, pal, o) {
   const lab = new Uint8Array(N);
 
   // Siluet: ambang luminans pada gambar kerja yang sudah halus → kontur sub-piksel.
-  if (o.mode === 'silhouette') {
+  if (o.mode === 'silhouette' && o.silTones === 'binary') {
     const thr = o.silThreshold ?? 128;
     for (let i = 0, p = 0; i < N; i++, p += 4) {
       if (data[p + 3] < 128) { lab[i] = T; continue; }
