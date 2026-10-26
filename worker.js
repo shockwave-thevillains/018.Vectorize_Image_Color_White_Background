@@ -121,6 +121,12 @@ async function vectorize(file, o, progress, aiMask) {
   // Penghalusan searah garis pada resolusi sumber, lalu upscale dari hasilnya.
   if (o.flow !== false) {
     flowSmooth(src, sw, sh, Math.max(2, Math.round(1.5 + 2.5 * o.smooth)));
+    // Gradien: garis tipis diratakan lebih panjang searah garis (kecerahan &
+    // tebal seragam, tidak putus); hanya piksel dengan arah yang sangat jelas.
+    if (o.mode === 'gradient') {
+      flowSmooth(src, sw, sh, 7, 0.7, 120);
+      o._orient = orientField(src, sw, sh);
+    }
     g0.putImageData(new ImageData(src, sw, sh), 0, 0);
   }
   progress(0.1, 'arah garis');
@@ -710,6 +716,7 @@ function assignLabels(data, W, H, s, pal, o) {
   if (o.mode === 'gradient') {
     edgeSnap(lab, data, W, H, pal, Math.max(2, Math.round(1.6 * s)));
     majorityFilter(lab, W, H, Math.max(1, Math.round(s * 0.6)), 2, pal, 20);
+    if (o._orient) orientedMajority(lab, W, H, s, o._orient, Math.max(3, Math.round(3 * s)), 2);
   }
   else if (o.lineThreshold !== false) lineThreshold(lab, data, W, H, pal);
   return lab;
@@ -855,6 +862,79 @@ function bilateral(px, w, h, r, ss, sr) {
   }
 }
 
+// Arah garis per piksel sumber (tensor struktur, diperhalus): tangen (TX,TY)
+// dan koherensi 0..1 (1 = arah sangat jelas, mis. garis lurus tipis).
+function orientField(px, w, h) {
+  const N = w * h, W4 = w * 4;
+  const E = new Float32Array(N), F = new Float32Array(N), G = new Float32Array(N);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x, p = i * 4;
+      let e = 0, f = 0, g = 0;
+      for (let c = 0; c < 3; c++) {
+        const gx = (px[p + 4 + c] - px[p - 4 + c]) * 0.5, gy = (px[p + W4 + c] - px[p - W4 + c]) * 0.5;
+        e += gx * gx; f += gx * gy; g += gy * gy;
+      }
+      E[i] = e; F[i] = f; G[i] = g;
+    }
+  }
+  for (const A of [E, F, G]) { boxBlur(A, w, h, 2); boxBlur(A, w, h, 1); }
+  const TX = new Float32Array(N), TY = new Float32Array(N), C = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const e = E[i], f = F[i], g = G[i], tr = e + g;
+    if (tr < 60) continue;
+    const disc = Math.sqrt((e - g) * (e - g) + 4 * f * f);
+    const l1 = (tr + disc) / 2, l2 = (tr - disc) / 2;
+    let tx = -f, ty = l1 - g;
+    const ux = l1 - e, uy = -f;
+    if (ux * ux + uy * uy > tx * tx + ty * ty) { tx = ux; ty = uy; }
+    const L = Math.hypot(tx, ty);
+    if (L < 1e-9) continue;
+    TX[i] = tx / L; TY[i] = ty / L; C[i] = (l1 - l2) / (l1 + l2 + 1e-9);
+  }
+  return { TX, TY, C, w, h };
+}
+
+// Mayoritas memanjang: piksel di batas label pada area berarah jelas mengambil
+// label terbanyak di sepanjang segmen ±L searah garis. Bagian garis tipis yang
+// putus tersambung dan tepinya rata (lebar mengikuti mayoritas sepanjang garis).
+function orientedMajority(lab, W, H, s, of, L, passes) {
+  const N = W * H;
+  const cnt = new Uint16Array(256);
+  let src = lab, dst = new Uint8Array(N);
+  for (let ps = 0; ps < passes; ps++) {
+    dst.set(src);
+    for (let y = 1; y < H - 1; y++) {
+      const sy = Math.min(of.h - 1, (y / s) | 0);
+      for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x, own = src[i];
+        if (own >= HW) continue;
+        if (src[i - 1] === own && src[i + 1] === own && src[i - W] === own && src[i + W] === own &&
+            src[i - W - 1] === own && src[i - W + 1] === own && src[i + W - 1] === own && src[i + W + 1] === own) continue;
+        const j = sy * of.w + Math.min(of.w - 1, (x / s) | 0);
+        if (of.C[j] < 0.6) continue;
+        const tx = of.TX[j], ty = of.TY[j];
+        let best = own, bc = 0;
+        const seen = [];
+        for (let k = -L; k <= L; k++) {
+          const xx = Math.round(x + k * tx), yy = Math.round(y + k * ty);
+          if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+          const l = src[yy * W + xx];
+          if (l >= HW) continue;
+          if (!cnt[l]) seen.push(l);
+          const c = ++cnt[l];
+          if (c > bc || (c === bc && l === own)) { bc = c; best = l; }
+        }
+        for (const l of seen) cnt[l] = 0;
+        dst[i] = best;
+      }
+    }
+    const t = src === lab ? new Uint8Array(N) : src;
+    src = dst; dst = t;
+  }
+  if (src !== lab) lab.set(src);
+}
+
 // Filter mayoritas (mode) pada peta label: tiap piksel mengambil label terbanyak
 // di jendela (2r+1)². Batas antar pita gradien yang bergerigi/berbintik menjadi
 // rata, sehingga garis kontur lebih rapi. Label transparan tidak diubah.
@@ -985,7 +1065,7 @@ function blurPass(data, W, H) {
 // tensor struktur). Getaran tepi akibat kompresi diratakan SEPANJANG garis, jadi
 // kedua sisi garis outline ikut rata dan tebalnya seragam; tidak ada blur yang
 // menyilang garis. Di sudut/pertemuan warna arahnya tidak koheren → dibiarkan.
-function flowSmooth(px, w, h, R) {
+function flowSmooth(px, w, h, R, minCoh = 0.5, minTr = 300) {
   const N = w * h, W4 = w * 4;
   const E = new Float32Array(N), F = new Float32Array(N), G = new Float32Array(N);
   for (let y = 1; y < h - 1; y++) {
@@ -1004,18 +1084,18 @@ function flowSmooth(px, w, h, R) {
   const TX = new Float32Array(N), TY = new Float32Array(N), WT = new Float32Array(N);
   for (let i = 0; i < N; i++) {
     const e = E[i], f = F[i], g = G[i], tr = e + g;
-    if (tr < 300) continue;
+    if (tr < minTr) continue;
     const disc = Math.sqrt((e - g) * (e - g) + 4 * f * f);
     const l1 = (tr + disc) / 2, l2 = (tr - disc) / 2;
     const coh = (l1 - l2) / (l1 + l2 + 1e-9);
-    if (coh < 0.5) continue;
+    if (coh < minCoh) continue;
     let tx = -f, ty = l1 - g;
     const ux = l1 - e, uy = -f;
     if (ux * ux + uy * uy > tx * tx + ty * ty) { tx = ux; ty = uy; }
     const L = Math.hypot(tx, ty);
     if (L < 1e-9) continue;
     TX[i] = tx / L; TY[i] = ty / L;
-    WT[i] = Math.min(1, ((coh - 0.5) / 0.4) ** 2);
+    WT[i] = Math.min(1, ((coh - minCoh) / Math.max(0.1, 0.9 - minCoh)) ** 2);
   }
   const out = new Uint8ClampedArray(px);
   const sig2 = 2 * (R / 1.6) ** 2;
