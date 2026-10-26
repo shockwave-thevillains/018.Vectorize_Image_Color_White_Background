@@ -156,6 +156,32 @@ function gapStrokes(res, i, hidden, sinkFactory, rank) {
   return segs;
 }
 
+// Garis tipis (stroke) di atas semua bentuk: kurva Bézier di koordinat kerja.
+function lineD(L, kx, ky) {
+  const p = L.p, o = ['M', num(p[0] * kx), num(p[1] * ky)];
+  for (let j = 2; j < p.length; j += 6) o.push('C', num(p[j] * kx), num(p[j + 1] * ky), num(p[j + 2] * kx), num(p[j + 3] * ky), num(p[j + 4] * kx), num(p[j + 5] * ky));
+  return o.join(' ');
+}
+function linesSVG(res, kx, ky, fixedW) {
+  if (!res.lines || !res.lines.length) return '';
+  return '<g fill="none" stroke-linecap="round" stroke-linejoin="round">' + res.lines.map((L) =>
+    `<path stroke="${hex(L.rgb)}" stroke-width="${fixedW ? 1 : num(L.w * kx)}"${fixedW ? ' vector-effect="non-scaling-stroke"' : ''} d="${lineD(L, kx, ky)}"/>`).join('') + '</g>';
+}
+function linesEPS(res, kx, ky, OH) {
+  const L = [];
+  if (!res.lines || !res.lines.length) return L;
+  L.push('1 setlinecap 1 setlinejoin');
+  for (const ln of res.lines) {
+    const p = ln.p;
+    L.push(`${num(ln.w * kx)} setlinewidth ${ln.rgb.map((v) => num(v / 255)).join(' ')} rg`);
+    const parts = ['newpath', num(p[0] * kx), num(OH - p[1] * ky), 'm'];
+    for (let j = 2; j < p.length; j += 6) parts.push(num(p[j] * kx), num(OH - p[j + 1] * ky), num(p[j + 2] * kx), num(OH - p[j + 3] * ky), num(p[j + 4] * kx), num(OH - p[j + 5] * ky), 'c');
+    parts.push('s');
+    L.push(parts.join(' '));
+  }
+  return L;
+}
+
 // Lebar garis pengisi celah dalam px output: minimal opt.gapWidth, ikut membesar
 // pada artboard besar agar tetap menutup celah saat dilihat diperkecil.
 const gapWidthFor = (opt, OW, res) => Math.max(opt.gapWidth || 1, (2.5 * OW) / res.srcW);
@@ -194,6 +220,8 @@ export function buildSVG(res, opt) {
       if (d.length) parts.push(`<path fill="none" stroke="${c}" stroke-width="${gw}" stroke-linejoin="round" d="${d.join('')}"/>`);
     }
   }
+  const ls = linesSVG(res, kx, ky);
+  if (ls) parts.push(ls);
   parts.push('</svg>');
   return parts.join('\n');
 }
@@ -255,6 +283,7 @@ export function buildEPS(res, opt, title) {
       }
     }
   }
+  L.push(...linesEPS(res, kx, ky, OH));
   L.push('grestore');
   L.push('showpage');
   L.push('%%Trailer');
@@ -278,14 +307,15 @@ export function previewMarkup(res, opt) {
       if (d.length) parts.push(`<path fill="none" stroke="${c}" stroke-width="1" vector-effect="non-scaling-stroke" stroke-linejoin="round" d="${d.join('')}"/>`);
     }
   }
-  return parts.join('');
+  return parts.join('') + linesSVG(res, 1, 1);
 }
 
 export function outlineMarkup(res, hidden) {
   const h = hidden || defaultHidden(res);
   const sk = svgSink(1, 1);
   res.regions.forEach((r, i) => { if (!h[i]) for (const s of r.subs) walk(s.refs, res.chains, sk, true); });
-  return `<path d="${sk.text()}"/>`;
+  const ld = (res.lines || []).map((L) => lineD(L, 1, 1)).join(' ');
+  return `<path d="${sk.text()}"/>` + (ld ? `<path d="${ld}"/>` : '');
 }
 
 // Path satu region (untuk sorotan saat kursor di atasnya).

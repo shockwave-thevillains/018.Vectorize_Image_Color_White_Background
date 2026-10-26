@@ -9,7 +9,7 @@ jadi bisa di-host gratis di GitHub Pages.
 - **Batch**: seret banyak gambar sekaligus (atau tempel dari clipboard). Diproses paralel.
 - **Mode Warna, Siluet, atau Gradien**
   - *Warna*: palet otomatis (atau dibatasi), cocok untuk ilustrasi flat.
-  - *Gradien*: untuk gambar penuh gradasi/cahaya (ilustrasi digital, adegan malam). Palet besar (bawaan 64 warna, 16–128) tanpa peleburan agresif; pita peralihan tipis di tepi garis dipindahkan ke sisi yang benar dan batas antar tingkat warna dirapikan (filter mayoritas), sehingga outline tidak berhalo.
+  - *Gradien*: untuk gambar penuh gradasi/cahaya (ilustrasi digital, adegan malam). Palet besar (bawaan 64 warna, 16–128) tanpa peleburan agresif; pita peralihan tipis di tepi garis dipindahkan ke sisi yang benar dan batas antar tingkat warna dirapikan (filter mayoritas), sehingga outline tidak berhalo. **Garis tipis → garis vektor** (bawaan aktif): garis ≤ ~3 px dikenali, dihapus dari isian, lalu digambar ulang sebagai stroke bertebal seragam (potongan yang searah disambung, warna garis yang mirip diseragamkan).
   - *Siluet*: untuk stensil, emblem, siluet. Nada **Hitam + abu-abu** (tingkat abu-abu dipertahankan dengan rona aslinya) atau **Hitam saja** (ambang gelap/terang bisa diatur). Dengan latar putih, rongga di dalam siluet bisa **Luar**, **Pintar**, **Semua** (transparan), atau **Isi**.
 - **Upscale sebelum tracing** (default 4×) agar batas warna jatuh di posisi sub-piksel.
 - **Warna latar: Tanpa / Putih / Magenta**. *Tanpa*: tidak ada warna yang dihapus — semua warna (termasuk putih dan magenta) divectorisasi.

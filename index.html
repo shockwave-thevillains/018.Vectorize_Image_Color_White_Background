@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=202610260629">
+  <link rel="stylesheet" href="styles.css?v=202610261140">
 </head>
 <body>
   <header class="top">
@@ -110,6 +110,7 @@
             <label class="flabel" for="gradColors">Jumlah warna <output class="mono" for="gradColors"></output></label>
             <input type="range" id="gradColors" data-opt="gradColors" min="16" max="128" step="4">
             <div class="scale mono"><span>ringan</span><span>detail</span></div>
+            <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="lineStrokes"><span><b>Garis tipis → garis vektor</b><small>Garis setipis ≤ 3 px dikenali dan dibuat sebagai garis (stroke) bertebal seragam, bukan isian.</small></span></label>
             <p class="note">Untuk gambar penuh gradasi/cahaya. Gradasi dibentuk dari banyak tingkat warna (seperti vectorizer.ai).</p>
           </div>
           <div class="field" data-show="silhouette">
@@ -276,6 +277,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202610260629"></script>
+  <script type="module" src="app.js?v=202610261140"></script>
 </body>
 </html>

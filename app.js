@@ -1,9 +1,10 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610260629';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610261140';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
   mode: 'color',
   gradColors: 64,
+  lineStrokes: true,
   silTones: 'gray',
   silThreshold: 128,
   cavity: 'white',
@@ -27,7 +28,7 @@ const DEFAULTS = {
   start: 1,
   format: 'both',
 };
-const PROC = ['bgKey', 'keyTol', 'mode', 'gradColors', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
+const PROC = ['bgKey', 'keyTol', 'mode', 'gradColors', 'lineStrokes', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
 const MAX_WORK = 4096 * 4096;
 const GAP_WIDTH = 1.5; // px output
 
@@ -62,6 +63,7 @@ function procOpts() {
     keyTol: S.keyTol,
     mode: S.mode,
     gradColors: S.gradColors,
+    lineStrokes: S.lineStrokes,
     silTones: S.silTones,
     silThreshold: S.silThreshold,
     cavity: S.cavity,
@@ -161,7 +163,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202610260629');
+  const w = new Worker('worker.js?v=202610261140');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -181,7 +183,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202610260629', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202610261140', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -672,7 +674,7 @@ function renderViewer() {
     vOut.dataset.for = vLensOut.dataset.for = '';
     const shapes = hidden.reduce((n, h) => n + (h ? 0 : 1), 0);
     const lc = S.learn ? learnedCount(it) : 0;
-    $('#vinfo').textContent = `${res.srcW}×${res.srcH} → proses ${res.W}×${res.H} · ${res.palette.length} warna · ${fmtInt(shapes)} bentuk · ${fmtInt(res.nodes)} segmen${lc ? ` · ${lc} dikoreksi dari ingatan` : ''}`;
+    $('#vinfo').textContent = `${res.srcW}×${res.srcH} → proses ${res.W}×${res.H} · ${res.palette.length} warna · ${fmtInt(shapes)} bentuk · ${fmtInt(res.nodes)} segmen${res.lines && res.lines.length ? ` · ${fmtInt(res.lines.length)} garis` : ''}${lc ? ` · ${lc} dikoreksi dari ingatan` : ''}`;
     renderPalette(it);
   } else {
     vVec.innerHTML = '';

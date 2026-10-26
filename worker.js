@@ -84,6 +84,10 @@ async function vectorize(file, o, progress, aiMask) {
   }
   // Gradien: grain/noise JPEG di area datar diratakan (bilateral) sebelum palet,
   // supaya area halus menjadi bentuk besar yang mulus; tepi kontras tetap tajam.
+  // Gradien: garis tipis dideteksi dulu, dihapus dari gambar (diisi warna
+  // latarnya), lalu digambar ulang sebagai garis vektor bertebal seragam.
+  const thinLines = o.mode === 'gradient' && o.lineStrokes !== false ? detectLines(src, sw, sh) : [];
+  if (thinLines.length) g0.putImageData(new ImageData(src, sw, sh), 0, 0);
   if (o.mode === 'gradient') {
     // Detail kecil yang kontras (garis tipis, titik, huruf) dilindungi: bobotnya
     // dihitung dari selisih terhadap rata-rata 5×5 sebelum penghalusan.
@@ -280,10 +284,267 @@ async function vectorize(file, o, progress, aiMask) {
     chains: out.chains,
     regions: out.regions,
     nodes: out.nodes,
+    lines: fitLines(thinLines, s),
     rmap,
     rmapW: mw,
     rmapH: mh,
   };
+}
+
+// ---------------------------------------------------------------- garis tipis
+// Deteksi garis tipis (≤ ~2,8 px sumber) yang lebih terang/gelap dari kedua
+// sisinya pada arah tegak lurus garis. Hasil: rantai titik tengah + lebar +
+// warna asli (dikoreksi dari campuran dengan latar). Garis dihapus dari px
+// (diisi rata-rata warna kedua sisinya) supaya tidak ikut menjadi isian.
+function detectLines(px, w, h) {
+  const N = w * h;
+  const of = orientField(px, w, h);
+  const samp = (x, y, out) => {
+    x = Math.max(0, Math.min(w - 1.001, x)); y = Math.max(0, Math.min(h - 1.001, y));
+    const x0 = x | 0, y0 = y | 0, fx = x - x0, fy = y - y0;
+    const p00 = (y0 * w + x0) * 4, p10 = p00 + 4, p01 = p00 + w * 4, p11 = p01 + 4;
+    for (let c = 0; c < 3; c++) out[c] = (1 - fx) * (1 - fy) * px[p00 + c] + fx * (1 - fy) * px[p10 + c] + (1 - fx) * fy * px[p01 + c] + fx * fy * px[p11 + c];
+    return out;
+  };
+  const d3 = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+  const Y = (a) => 0.299 * a[0] + 0.587 * a[1] + 0.114 * a[2];
+  const S = new Float32Array(N), WD = new Float32Array(N), NX = new Float32Array(N), NY = new Float32Array(N);
+  const CR = new Float32Array(N * 3), BG = new Float32Array(N * 3);
+  const A = [0, 0, 0], B = [0, 0, 0], C = [0, 0, 0], M = [0, 0, 0], Q = [0, 0, 0];
+  for (let y = 2; y < h - 2; y++) {
+    for (let x = 2; x < w - 2; x++) {
+      const i = y * w + x;
+      if (px[i * 4 + 3] < 255 || of.C[i] < 0.45) continue;
+      const nx = -of.TY[i], ny = of.TX[i];
+      samp(x, y, C); samp(x + 2 * nx, y + 2 * ny, A); samp(x - 2 * nx, y - 2 * ny, B);
+      for (let c = 0; c < 3; c++) M[c] = (A[c] + B[c]) / 2;
+      const yc = Y(C), ya = Y(A), yb = Y(B);
+      if (!((yc > ya + 8 && yc > yb + 8) || (yc < ya - 8 && yc < yb - 8))) continue;
+      const st = d3(C, M);
+      if (st < 28 || d3(A, B) > 0.7 * st) continue;
+      // Lebar: jarak di mana selisih terhadap latar turun ke separuhnya.
+      let wd = 0;
+      for (const sg of [1, -1]) {
+        let t = 0.25;
+        for (; t <= 3; t += 0.25) if (d3(samp(x + sg * t * nx, y + sg * t * ny, Q), M) < st / 2) break;
+        wd += t - 0.125;
+      }
+      if (wd > 2.8) continue;
+      S[i] = st; WD[i] = wd; NX[i] = nx; NY[i] = ny;
+      for (let c = 0; c < 3; c++) { CR[i * 3 + c] = C[c]; BG[i * 3 + c] = M[c]; }
+    }
+  }
+  // Non-maximum suppression melintang garis → punggung 1 px.
+  const mask = new Uint8Array(N);
+  for (let y = 2; y < h - 2; y++) {
+    for (let x = 2; x < w - 2; x++) {
+      const i = y * w + x, v = S[i];
+      if (!v) continue;
+      const a = Math.round(x + NX[i]) + Math.round(y + NY[i]) * w, b = Math.round(x - NX[i]) + Math.round(y - NY[i]) * w;
+      if (S[a] > v || S[b] > v) continue;
+      mask[i] = 1;
+    }
+  }
+  thinZS(mask, w, h);
+  // Pisah di persimpangan, lalu telusuri rantai.
+  const nb = [-w - 1, -w, -w + 1, -1, 1, w - 1, w, w + 1];
+  const deg = (i) => { let n = 0; for (const d of nb) if (mask[i + d]) n++; return n; };
+  for (let i = w; i < N - w; i++) if (mask[i] && deg(i) >= 3) mask[i] = 2;
+  for (let i = 0; i < N; i++) if (mask[i] === 2) mask[i] = 0;
+  const seen = new Uint8Array(N);
+  const lines = [];
+  const walk = (s0) => {
+    const pts = [s0];
+    seen[s0] = 1;
+    let cur = s0;
+    for (;;) {
+      let nxt = -1;
+      for (const d of [-w, 1, w, -1, -w - 1, -w + 1, w - 1, w + 1]) { const j = cur + d; if (mask[j] && !seen[j]) { nxt = j; break; } }
+      if (nxt < 0) break;
+      seen[nxt] = 1; pts.push(nxt); cur = nxt;
+    }
+    return pts;
+  };
+  const order = [];
+  for (let i = w; i < N - w; i++) if (mask[i] && deg(i) <= 1) order.push(i);
+  for (let i = w; i < N - w; i++) if (mask[i]) order.push(i);
+  let raw = [];
+  for (const s0 of order) {
+    if (seen[s0]) continue;
+    const pts = walk(s0);
+    if (pts.length >= 3) raw.push(pts);
+  }
+  raw = linkChains(raw, w, 6, 35);
+  const cand = [];
+  for (const pts of raw) {
+    if (pts.length < 10) continue;
+    const ws = [], ch = [[], [], [], [], [], []];
+    for (const i of pts) { ws.push(WD[i]); for (let c = 0; c < 3; c++) { ch[c].push(CR[i * 3 + c]); ch[c + 3].push(BG[i * 3 + c]); } }
+    const med = (a) => { a.sort((p, q) => p - q); return a[a.length >> 1]; };
+    const wd = med(ws), cv = Math.min(1, Math.max(0.5, wd));
+    // Warna sejati garis: pusat garis dikoreksi dari campuran dengan latar
+    // (berdasarkan lebar median satu garis, bukan per piksel → stabil).
+    const rgb = [0, 1, 2].map((c) => { const cc = med(ch[c]), mm = med(ch[c + 3]); return mm + (cc - mm) / cv; });
+    cand.push({ pts: pts.map((i) => [i % w, (i / w) | 0]), w: Math.max(1, wd), rgb, idx: pts });
+  }
+  // Warna garis yang mirip diseragamkan (dikelompokkan, berbobot panjang).
+  const groups = [];
+  for (const L of cand.sort((a, b) => b.pts.length - a.pts.length)) {
+    let g = groups.find((q) => Math.abs(q.r / q.n - L.rgb[0]) + Math.abs(q.g / q.n - L.rgb[1]) + Math.abs(q.b / q.n - L.rgb[2]) < 70);
+    if (!g) groups.push((g = { r: 0, g: 0, b: 0, n: 0, m: [] }));
+    const k = L.pts.length;
+    g.r += L.rgb[0] * k; g.g += L.rgb[1] * k; g.b += L.rgb[2] * k; g.n += k; g.m.push(L);
+  }
+  for (const g of groups) for (const L of g.m) L.rgb = [g.r / g.n, g.g / g.n, g.b / g.n].map(clamp255);
+  lines.push(...cand);
+  // Hapus garis dari gambar: piksel dalam ±(w/2+1,5) diisi peralihan linear
+  // antara warna kedua sisinya (diambil di luar garis, dari gambar asli).
+  const orig = new Uint8ClampedArray(px);
+  const sampO = (x, y, out) => {
+    const xx = Math.max(0, Math.min(w - 1, Math.round(x))), yy = Math.max(0, Math.min(h - 1, Math.round(y))), p = (yy * w + xx) * 4;
+    out[0] = orig[p]; out[1] = orig[p + 1]; out[2] = orig[p + 2]; return out;
+  };
+  const SA = [0, 0, 0], SB = [0, 0, 0];
+  for (const L of lines) {
+    const half = L.w / 2 + 1.5;
+    for (const i of L.idx) {
+      const x = i % w, y = (i / w) | 0, nx = NX[i], ny = NY[i];
+      sampO(x + (half + 1) * nx, y + (half + 1) * ny, SA); sampO(x - (half + 1) * nx, y - (half + 1) * ny, SB);
+      for (let t = -half; t <= half; t += 0.5) {
+        const xx = Math.round(x + t * nx), yy = Math.round(y + t * ny);
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const p = (yy * w + xx) * 4;
+        if (orig[p + 3] < 255) continue;
+        const f = (t + half) / (2 * half);
+        px[p] = SB[0] + f * (SA[0] - SB[0]); px[p + 1] = SB[1] + f * (SA[1] - SB[1]); px[p + 2] = SB[2] + f * (SA[2] - SB[2]);
+      }
+    }
+    delete L.idx;
+  }
+  return lines;
+}
+
+// Sambungkan rantai yang ujungnya berdekatan (≤ maxGap px) dan searah
+// (sudut ≤ maxAng°): garis yang putus atau terpotong di persilangan menyatu.
+function linkChains(chains, w, maxGap, maxAng) {
+  const P = (i) => [i % w, (i / w) | 0];
+  const cosMax = Math.cos((maxAng * Math.PI) / 180);
+  const endDir = (c, atEnd) => {
+    const n = c.length, k = Math.min(5, n - 1);
+    const a = P(atEnd ? c[n - 1 - k] : c[k]), b = P(atEnd ? c[n - 1] : c[0]);
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1;
+    return [dx / L, dy / L];
+  };
+  let merged = true;
+  while (merged) {
+    merged = false;
+    const ends = [];
+    chains.forEach((c, ci) => { ends.push([ci, 0], [ci, 1]); });
+    const cand = [];
+    const grid = new Map(), cell = maxGap;
+    const key = (x, y) => ((x / cell) | 0) * 100003 + ((y / cell) | 0);
+    for (const [ci, e] of ends) {
+      const c = chains[ci], p = P(e ? c[c.length - 1] : c[0]);
+      const k = key(p[0], p[1]);
+      if (!grid.has(k)) grid.set(k, []);
+      grid.get(k).push([ci, e, p]);
+    }
+    for (const [ci, e] of ends) {
+      const c = chains[ci], p = P(e ? c[c.length - 1] : c[0]), d1 = endDir(c, e);
+      const gx = (p[0] / cell) | 0, gy = (p[1] / cell) | 0;
+      for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
+        for (const [cj, f, q] of grid.get((gx + ox) * 100003 + gy + oy) || []) {
+          if (cj <= ci) continue;
+          const dx = q[0] - p[0], dy = q[1] - p[1], dist = Math.hypot(dx, dy);
+          if (dist > maxGap) continue;
+          const d2 = endDir(chains[cj], f);
+          // Arah ujung A menghadap B, arah ujung B menghadap A.
+          if (-(d1[0] * d2[0] + d1[1] * d2[1]) < cosMax) continue;
+          if (dist > 1.5 && (dx * d1[0] + dy * d1[1]) / dist < cosMax) continue;
+          cand.push([dist, ci, e, cj, f]);
+        }
+      }
+    }
+    cand.sort((a, b) => a[0] - b[0]);
+    const used = new Set(), dead = new Set();
+    for (const [, ci, e, cj, f] of cand) {
+      if (dead.has(ci) || dead.has(cj) || used.has(ci * 2 + e) || used.has(cj * 2 + f)) continue;
+      let A = chains[ci], B = chains[cj];
+      if (!e) A = A.slice().reverse();
+      if (f) B = B.slice().reverse();
+      chains[ci] = A.concat(B);
+      dead.add(cj);
+      used.add(ci * 2 + 0); used.add(ci * 2 + 1);
+      merged = true;
+    }
+    chains = chains.filter((_, k) => !dead.has(k));
+  }
+  return chains;
+}
+
+// Penipisan Zhang–Suen (mask 0/1, di tempat).
+function thinZS(m, w, h) {
+  let changed = true;
+  const del = [];
+  while (changed) {
+    changed = false;
+    for (let step = 0; step < 2; step++) {
+      del.length = 0;
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const i = y * w + x;
+          if (!m[i]) continue;
+          const p2 = m[i - w], p3 = m[i - w + 1], p4 = m[i + 1], p5 = m[i + w + 1], p6 = m[i + w], p7 = m[i + w - 1], p8 = m[i - 1], p9 = m[i - w - 1];
+          const bn = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+          if (bn < 2 || bn > 6) continue;
+          const seq = [p2, p3, p4, p5, p6, p7, p8, p9, p2];
+          let a = 0;
+          for (let k = 0; k < 8; k++) if (!seq[k] && seq[k + 1]) a++;
+          if (a !== 1) continue;
+          if (step === 0 ? (p2 && p4 && p6) || (p4 && p6 && p8) : (p2 && p4 && p8) || (p2 && p6 && p8)) continue;
+          del.push(i);
+        }
+      }
+      if (del.length) changed = true;
+      for (const i of del) m[i] = 0;
+    }
+  }
+}
+
+// Rantai titik (px sumber) → kurva halus di koordinat kerja: perataan ringan,
+// penyederhanaan Douglas–Peucker, lalu Catmull-Rom → Bézier kubik.
+function fitLines(lines, s) {
+  const out = [];
+  for (const L of lines) {
+    let P = L.pts.map(([x, y]) => [(x + 0.5) * s, (y + 0.5) * s]);
+    for (let it = 0; it < 3; it++) {
+      const Q = P.map((p) => p.slice());
+      for (let k = 1; k < P.length - 1; k++) { Q[k][0] = (P[k - 1][0] + 2 * P[k][0] + P[k + 1][0]) / 4; Q[k][1] = (P[k - 1][1] + 2 * P[k][1] + P[k + 1][1]) / 4; }
+      P = Q;
+    }
+    const tol = 0.45 * s, keep = new Uint8Array(P.length);
+    keep[0] = keep[P.length - 1] = 1;
+    const rdp = (a, b) => {
+      const [ax, ay] = P[a], [bx, by] = P[b], dx = bx - ax, dy = by - ay, L2 = Math.hypot(dx, dy) || 1;
+      let mi = -1, md = tol;
+      for (let k = a + 1; k < b; k++) { const d = Math.abs((P[k][0] - ax) * dy - (P[k][1] - ay) * dx) / L2; if (d > md) { md = d; mi = k; } }
+      if (mi > 0) { keep[mi] = 1; rdp(a, mi); rdp(mi, b); }
+    };
+    rdp(0, P.length - 1);
+    const K = P.filter((_, k) => keep[k]);
+    // Ujung diperpanjang ±1,2 px sumber agar menyentuh titik/bentuk di ujungnya.
+    if (K.length >= 2) {
+      const ext = (a, b) => { const dx = a[0] - b[0], dy = a[1] - b[1], l = Math.hypot(dx, dy) || 1; a[0] += (dx / l) * 1.2 * s; a[1] += (dy / l) * 1.2 * s; };
+      ext(K[0], K[1]); ext(K[K.length - 1], K[K.length - 2]);
+    }
+    const p = [K[0][0], K[0][1]];
+    for (let k = 0; k < K.length - 1; k++) {
+      const p0 = K[Math.max(0, k - 1)], p1 = K[k], p2 = K[k + 1], p3 = K[Math.min(K.length - 1, k + 2)];
+      p.push(p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6, p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6, p2[0], p2[1]);
+    }
+    out.push({ p, w: L.w * s, rgb: L.rgb });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- chroma key
