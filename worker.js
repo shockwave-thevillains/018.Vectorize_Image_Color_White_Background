@@ -309,39 +309,46 @@ function detectLines(px, w, h) {
   const d3 = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
   const Y = (a) => 0.299 * a[0] + 0.587 * a[1] + 0.114 * a[2];
   const S = new Float32Array(N), WD = new Float32Array(N), NX = new Float32Array(N), NY = new Float32Array(N);
+  const OX = new Float32Array(N), OY = new Float32Array(N);
   const CR = new Float32Array(N * 3), BG = new Float32Array(N * 3);
   const A = [0, 0, 0], B = [0, 0, 0], C = [0, 0, 0], M = [0, 0, 0], Q = [0, 0, 0];
+  const bC = [0, 0, 0], bM = [0, 0, 0];
+  const mask = new Uint8Array(N);
   for (let y = 2; y < h - 2; y++) {
     for (let x = 2; x < w - 2; x++) {
       const i = y * w + x;
       if (px[i * 4 + 3] < 255 || of.C[i] < 0.45) continue;
       const nx = -of.TY[i], ny = of.TX[i];
-      samp(x, y, C); samp(x + 2 * nx, y + 2 * ny, A); samp(x - 2 * nx, y - 2 * ny, B);
-      for (let c = 0; c < 3; c++) M[c] = (A[c] + B[c]) / 2;
-      const yc = Y(C), ya = Y(A), yb = Y(B);
-      if (!((yc > ya + 8 && yc > yb + 8) || (yc < ya - 8 && yc < yb - 8))) continue;
-      const st = d3(C, M);
-      if (st < 28 || d3(A, B) > 0.7 * st) continue;
+      // Puncak garis dicari sub-piksel di sepanjang normal (±0,75 px): garis
+      // 1–2 px yang miring sering berpusat di antara dua piksel.
+      let st = 0, bt = 0;
+      for (let t = -0.75; t <= 0.75; t += 0.25) {
+        const cx = x + t * nx, cy = y + t * ny;
+        samp(cx, cy, C); samp(cx + 2 * nx, cy + 2 * ny, A); samp(cx - 2 * nx, cy - 2 * ny, B);
+        for (let c = 0; c < 3; c++) M[c] = (A[c] + B[c]) / 2;
+        const yc = Y(C), ya = Y(A), yb = Y(B);
+        if (!((yc > ya + 8 && yc > yb + 8) || (yc < ya - 8 && yc < yb - 8))) continue;
+        const v = d3(C, M);
+        if (v <= st || d3(A, B) > 0.7 * v) continue;
+        st = v; bt = t;
+        for (let c = 0; c < 3; c++) { bC[c] = C[c]; bM[c] = M[c]; }
+      }
+      // Hanya piksel yang paling dekat ke puncak (|t| ≤ 0,5) → punggung ±1 px.
+      if (st < 28 || Math.abs(bt) > 0.5) continue;
+      const cx = x + bt * nx, cy = y + bt * ny;
       // Lebar: jarak di mana selisih terhadap latar turun ke separuhnya.
-      let wd = 0;
+      let wd = 0, flat = 0;
       for (const sg of [1, -1]) {
         let t = 0.25;
-        for (; t <= 3; t += 0.25) if (d3(samp(x + sg * t * nx, y + sg * t * ny, Q), M) < st / 2) break;
+        for (; t <= 3; t += 0.25) if (d3(samp(cx + sg * t * nx, cy + sg * t * ny, Q), bM) < st / 2) break;
         wd += t - 0.125;
+        // Latar di sisi ini harus rata (bukan celah gelap di antara dua garis terang).
+        const s2 = samp(cx + sg * 2 * nx, cy + sg * 2 * ny, A), s4 = samp(cx + sg * 3.5 * nx, cy + sg * 3.5 * ny, B);
+        if (d3(s2, s4) < 0.6 * st) flat++;
       }
-      if (wd > 2.8) continue;
-      S[i] = st; WD[i] = wd; NX[i] = nx; NY[i] = ny;
-      for (let c = 0; c < 3; c++) { CR[i * 3 + c] = C[c]; BG[i * 3 + c] = M[c]; }
-    }
-  }
-  // Non-maximum suppression melintang garis → punggung 1 px.
-  const mask = new Uint8Array(N);
-  for (let y = 2; y < h - 2; y++) {
-    for (let x = 2; x < w - 2; x++) {
-      const i = y * w + x, v = S[i];
-      if (!v) continue;
-      const a = Math.round(x + NX[i]) + Math.round(y + NY[i]) * w, b = Math.round(x - NX[i]) + Math.round(y - NY[i]) * w;
-      if (S[a] > v || S[b] > v) continue;
+      if (wd > 2.8 || !flat) continue;
+      S[i] = st; WD[i] = wd; NX[i] = nx; NY[i] = ny; OX[i] = cx; OY[i] = cy;
+      for (let c = 0; c < 3; c++) { CR[i * 3 + c] = bC[c]; BG[i * 3 + c] = bM[c]; }
       mask[i] = 1;
     }
   }
@@ -349,7 +356,19 @@ function detectLines(px, w, h) {
   // Pisah di persimpangan, lalu telusuri rantai.
   const nb = [-w - 1, -w, -w + 1, -1, 1, w - 1, w, w + 1];
   const deg = (i) => { let n = 0; for (const d of nb) if (mask[i + d]) n++; return n; };
-  for (let i = w; i < N - w; i++) if (mask[i] && deg(i) >= 3) mask[i] = 2;
+  // Anak tangga garis diagonal (piksel sudut yang tetangganya sudah saling
+  // bersentuhan) dibuang → garis 8-terhubung bersih.
+  const ring = [-w, -w + 1, 1, w + 1, w, w - 1, -1, -w - 1];
+  for (let i = w + 1; i < N - w - 1; i++) {
+    if (!mask[i]) continue;
+    for (let k = 0; k < 8; k += 2) {
+      const a = ring[k], b = ring[(k + 2) % 8], ab = ring[(k + 1) % 8];
+      if (mask[i + a] && mask[i + b] && !mask[i + ab] && deg(i) === 2) { mask[i] = 0; break; }
+    }
+  }
+  // Persimpangan = ≥3 cabang (transisi 0→1 di cincin 8 tetangga).
+  const branches = (i) => { let n = 0; for (let k = 0; k < 8; k++) if (!mask[i + ring[k]] && mask[i + ring[(k + 1) % 8]]) n++; return n; };
+  for (let i = w + 1; i < N - w - 1; i++) if (mask[i] && deg(i) >= 3 && branches(i) >= 3) mask[i] = 2;
   for (let i = 0; i < N; i++) if (mask[i] === 2) mask[i] = 0;
   const seen = new Uint8Array(N);
   const lines = [];
@@ -375,6 +394,8 @@ function detectLines(px, w, h) {
     if (pts.length >= 3) raw.push(pts);
   }
   raw = linkChains(raw, w, 6, 35);
+  // Celah lebih panjang (persilangan, simpul) hanya bila benar-benar segaris.
+  raw = linkChains(raw, w, 14, 14, 1.6);
   const cand = [];
   for (const pts of raw) {
     if (pts.length < 10) continue;
@@ -384,13 +405,19 @@ function detectLines(px, w, h) {
     const wd = med(ws), cv = Math.min(1, Math.max(0.5, wd));
     // Warna sejati garis: pusat garis dikoreksi dari campuran dengan latar
     // (berdasarkan lebar median satu garis, bukan per piksel → stabil).
-    const rgb = [0, 1, 2].map((c) => { const cc = med(ch[c]), mm = med(ch[c + 3]); return mm + (cc - mm) / cv; });
-    cand.push({ pts: pts.map((i) => [i % w, (i / w) | 0]), w: Math.max(1, wd), rgb, idx: pts });
+    // Koreksi seragam di ketiga kanal dan dibatasi gamut → rona tidak bergeser.
+    const cc = [0, 1, 2].map((c) => med(ch[c])), mm = [0, 1, 2].map((c) => med(ch[c + 3]));
+    let k = 1 / cv;
+    for (let c = 0; c < 3; c++) { const d = cc[c] - mm[c]; if (d > 0.5) k = Math.min(k, (255 - mm[c]) / d); else if (d < -0.5) k = Math.min(k, -mm[c] / d); }
+    const rgb = [0, 1, 2].map((c) => mm[c] + (cc[c] - mm[c]) * Math.max(1, k));
+    cand.push({ pts: pts.map((i) => [OX[i], OY[i]]), w: Math.max(1, wd), rgb, idx: pts });
   }
   // Warna garis yang mirip diseragamkan (dikelompokkan, berbobot panjang).
-  const groups = [];
+  const groups = [], la = new Float32Array(3), lb = new Float32Array(3);
+  const lab = (c, o) => rgb2lab(clamp255(c[0]) | 0, clamp255(c[1]) | 0, clamp255(c[2]) | 0, o);
   for (const L of cand.sort((a, b) => b.pts.length - a.pts.length)) {
-    let g = groups.find((q) => Math.abs(q.r / q.n - L.rgb[0]) + Math.abs(q.g / q.n - L.rgb[1]) + Math.abs(q.b / q.n - L.rgb[2]) < 70);
+    lab(L.rgb, la);
+    let g = groups.find((q) => { lab([q.r / q.n, q.g / q.n, q.b / q.n], lb); return Math.hypot(la[0] - lb[0], la[1] - lb[1], la[2] - lb[2]) < 9; });
     if (!g) groups.push((g = { r: 0, g: 0, b: 0, n: 0, m: [] }));
     const k = L.pts.length;
     g.r += L.rgb[0] * k; g.g += L.rgb[1] * k; g.b += L.rgb[2] * k; g.n += k; g.m.push(L);
@@ -404,11 +431,11 @@ function detectLines(px, w, h) {
     const xx = Math.max(0, Math.min(w - 1, Math.round(x))), yy = Math.max(0, Math.min(h - 1, Math.round(y))), p = (yy * w + xx) * 4;
     out[0] = orig[p]; out[1] = orig[p + 1]; out[2] = orig[p + 2]; return out;
   };
-  const SA = [0, 0, 0], SB = [0, 0, 0];
+  const SA = [0, 0, 0], SB = [0, 0, 0], hole = new Uint8Array(N);
   for (const L of lines) {
     const half = L.w / 2 + 1.5;
     for (const i of L.idx) {
-      const x = i % w, y = (i / w) | 0, nx = NX[i], ny = NY[i];
+      const x = OX[i], y = OY[i], nx = NX[i], ny = NY[i];
       sampO(x + (half + 1) * nx, y + (half + 1) * ny, SA); sampO(x - (half + 1) * nx, y - (half + 1) * ny, SB);
       for (let t = -half; t <= half; t += 0.5) {
         const xx = Math.round(x + t * nx), yy = Math.round(y + t * ny);
@@ -417,16 +444,29 @@ function detectLines(px, w, h) {
         if (orig[p + 3] < 255) continue;
         const f = (t + half) / (2 * half);
         px[p] = SB[0] + f * (SA[0] - SB[0]); px[p + 1] = SB[1] + f * (SA[1] - SB[1]); px[p + 2] = SB[2] + f * (SA[2] - SB[2]);
+        hole[p >> 2] = 1;
       }
     }
     delete L.idx;
+  }
+  // Isian bekas garis dihaluskan (difusi dari tepinya) → tanpa belang akibat
+  // derau JPEG di titik-titik sampel sisi garis.
+  const hi = [];
+  for (let i = w; i < N - w; i++) if (hole[i]) hi.push(i);
+  const buf = new Float32Array(hi.length * 3);
+  for (let it = 0; it < 12; it++) {
+    for (let k = 0; k < hi.length; k++) {
+      const p = hi[k] * 4;
+      for (let c = 0; c < 3; c++) buf[k * 3 + c] = (px[p - 4 + c] + px[p + 4 + c] + px[p - w * 4 + c] + px[p + w * 4 + c] + 2 * px[p + c]) / 6;
+    }
+    for (let k = 0; k < hi.length; k++) { const p = hi[k] * 4; for (let c = 0; c < 3; c++) px[p + c] = buf[k * 3 + c]; }
   }
   return lines;
 }
 
 // Sambungkan rantai yang ujungnya berdekatan (≤ maxGap px) dan searah
 // (sudut ≤ maxAng°): garis yang putus atau terpotong di persilangan menyatu.
-function linkChains(chains, w, maxGap, maxAng) {
+function linkChains(chains, w, maxGap, maxAng, maxLat = Infinity) {
   const P = (i) => [i % w, (i / w) | 0];
   const cosMax = Math.cos((maxAng * Math.PI) / 180);
   const endDir = (c, atEnd) => {
@@ -461,6 +501,8 @@ function linkChains(chains, w, maxGap, maxAng) {
           // Arah ujung A menghadap B, arah ujung B menghadap A.
           if (-(d1[0] * d2[0] + d1[1] * d2[1]) < cosMax) continue;
           if (dist > 1.5 && (dx * d1[0] + dy * d1[1]) / dist < cosMax) continue;
+          // Ujung B harus berada di perpanjangan garis A (simpangan samping kecil).
+          if (Math.abs(dx * d1[1] - dy * d1[0]) > maxLat) continue;
           cand.push([dist, ci, e, cj, f]);
         }
       }
