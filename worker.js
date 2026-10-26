@@ -131,7 +131,8 @@ async function vectorize(file, o, progress, aiMask) {
 
   const order = new Int32Array(N);
   const comp = new Int32Array(N);
-  const minA = Math.max(1, Math.round(o.minArea * s * s));
+  // Gradien: noise JPEG antar tingkat warna yang berdekatan dibuang lebih tegas.
+  const minA = Math.max(1, Math.round(o.minArea * (o.mode === 'gradient' ? 3 : 1) * s * s));
   despeckle(lab, W, H, minA, comp, order, pal);
   progress(0.45, 'bersih');
 
@@ -393,7 +394,9 @@ function buildPalette(px, w, h, o) {
   const bl = new Float32Array(32768 * 3);
   for (const k of bins) rgb2lab(Math.round(R[k] / C[k]), Math.round(G[k] / C[k]), Math.round(B[k] / C[k]), bl, k * 3);
 
-  const md = o.colorMerge;
+  const grad = o.mode === 'gradient';
+  // Mode gradien: banyak tingkat warna, tanpa peleburan agresif (gradasi = warna asli).
+  const md = grad ? 7 : o.colorMerge;
   let cl = [];
   for (const k of bins) {
     const L = bl[k * 3], A = bl[k * 3 + 1], Bb = bl[k * 3 + 2];
@@ -428,7 +431,7 @@ function buildPalette(px, w, h, o) {
         const d = (P[j].L - L) ** 2 + (P[j].A - A) ** 2 + (P[j].B - Bb) ** 2;
         if (d < bd) { bd = d; best = j; }
       }
-      if (Math.sqrt(bd) > md * 2.5) continue; // bin pencilan tidak menggeser pusat
+      if (!grad && Math.sqrt(bd) > md * 2.5) continue; // bin pencilan tidak menggeser pusat
       const a = acc[best], n = C[k];
       a.n += n; a.L += L * n; a.A += A * n; a.B += Bb * n; a.r += R[k]; a.g += G[k]; a.b += B[k];
     }
@@ -436,7 +439,7 @@ function buildPalette(px, w, h, o) {
   }
 
   // Gabungkan warna yang terlalu mirip, lalu batasi jumlah warna (Ward).
-  const maxC = o.maxColors > 0 ? o.maxColors : 64;
+  const maxC = grad ? Math.max(8, o.gradColors || 64) : o.maxColors > 0 ? o.maxColors : 64;
   for (;;) {
     let wi = -1, wj = -1, wc = Infinity; // pasangan Ward termurah
     let mi = -1, mj = -1, mdist = Infinity; // pasangan terdekat
@@ -451,7 +454,7 @@ function buildPalette(px, w, h, o) {
     // Varian minor: warna kecil yang cukup dekat dengan warna dominan
     // (mis. tepi garis tipis yang lebih gelap akibat kompresi) ikut dilebur.
     let vi = -1, vj = -1, vd = Infinity;
-    for (let i = 0; i < P.length; i++) {
+    for (let i = 0; i < P.length && !grad; i++) {
       for (let j = i + 1; j < P.length; j++) {
         const ratio = Math.min(P[i].n, P[j].n) / Math.max(P[i].n, P[j].n);
         if (ratio > 0.2) continue;
@@ -460,7 +463,7 @@ function buildPalette(px, w, h, o) {
       }
     }
     let a, b;
-    if (mi >= 0 && Math.sqrt(mdist) < md * 0.8) { a = mi; b = mj; }
+    if (mi >= 0 && Math.sqrt(mdist) < (grad ? 3 : md * 0.8)) { a = mi; b = mj; }
     else if (vi >= 0) { a = vi; b = vj; }
     else if (P.length > maxC && wi >= 0) { a = wi; b = wj; }
     else break;
@@ -493,6 +496,24 @@ function buildPalette(px, w, h, o) {
       if (bi < 0) continue;
       P[bi].n += c.n; // warna asli tetap milik b; jumlah piksel digabung
       P.splice(k, 1);
+    }
+  }
+
+  // Gradien: pusat warna disempurnakan sekali lagi (k-means) setelah penggabungan.
+  if (grad) {
+    for (let it = 0; it < 3; it++) {
+      const acc = P.map(() => ({ n: 0, L: 0, A: 0, B: 0, r: 0, g: 0, b: 0 }));
+      for (const k of bins) {
+        const L = bl[k * 3], A = bl[k * 3 + 1], Bb = bl[k * 3 + 2];
+        let best = 0, bd = Infinity;
+        for (let j = 0; j < P.length; j++) {
+          const d = (P[j].L - L) ** 2 + (P[j].A - A) ** 2 + (P[j].B - Bb) ** 2;
+          if (d < bd) { bd = d; best = j; }
+        }
+        const a = acc[best], n = C[k];
+        a.n += n; a.L += L * n; a.A += A * n; a.B += Bb * n; a.r += R[k]; a.g += G[k]; a.b += B[k];
+      }
+      P = acc.filter((a) => a.n > 0).map((a) => ({ n: a.n, L: a.L / a.n, A: a.A / a.n, B: a.B / a.n, r: a.r / a.n, g: a.g / a.n, b: a.b / a.n }));
     }
   }
 
@@ -661,8 +682,96 @@ function assignLabels(data, W, H, s, pal, o) {
   for (let i = 0, p = 0; i < N; i++, p += 4) {
     if (lab[i] === U) lab[i] = nearest(data[p], data[p + 1], data[p + 2]);
   }
-  if (o.lineThreshold !== false) lineThreshold(lab, data, W, H, pal);
+  if (o.mode === 'gradient') {
+    edgeSnap(lab, data, W, H, pal, Math.max(2, Math.round(1.6 * s)));
+    majorityFilter(lab, W, H, Math.max(1, Math.round(s * 0.6)), 2);
+  }
+  else if (o.lineThreshold !== false) lineThreshold(lab, data, W, H, pal);
   return lab;
+}
+
+// Penajaman batas label: piksel yang berada di pita tipis peralihan (warnanya di
+// antara warna kedua sisi tepi, diukur ±r searah gradien) dipindahkan ke sisi
+// yang lebih mirip. Halo gelap di sekitar garis outline hilang; garis tipis
+// (kedua sisinya sama) dan gradasi lebar tidak tersentuh.
+function edgeSnap(lab, data, W, H, pal, r) {
+  const N = W * H;
+  const Y = new Float32Array(N);
+  for (let i = 0, p = 0; i < N; i++, p += 4) Y[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+  const out = new Uint8Array(lab);
+  const pl = pal.map((p) => [p.L, p.A, p.B]);
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x, own = lab[i];
+      if (own >= HW) continue;
+      // Hanya piksel dekat batas label.
+      if (lab[i - 1] === own && lab[i + 1] === own && lab[i - W] === own && lab[i + W] === own &&
+          lab[i - W - 1] === own && lab[i + W + 1] === own && lab[i - W + 1] === own && lab[i + W - 1] === own) {
+        let near = false;
+        for (let d = 2; d <= r && !near; d++) {
+          if ((x + d < W && lab[i + d] !== own) || (x - d >= 0 && lab[i - d] !== own) ||
+              (y + d < H && lab[i + d * W] !== own) || (y - d >= 0 && lab[i - d * W] !== own)) near = true;
+        }
+        if (!near) continue;
+      }
+      const gx = (Y[i - W + 1] + 2 * Y[i + 1] + Y[i + W + 1]) - (Y[i - W - 1] + 2 * Y[i - 1] + Y[i + W - 1]);
+      const gy = (Y[i + W - 1] + 2 * Y[i + W] + Y[i + W + 1]) - (Y[i - W - 1] + 2 * Y[i - W] + Y[i - W + 1]);
+      const m = Math.hypot(gx, gy);
+      if (m < 8) continue;
+      const ux = gx / m, uy = gy / m;
+      const ax = Math.round(x - ux * r), ay = Math.round(y - uy * r), bx = Math.round(x + ux * r), by = Math.round(y + uy * r);
+      if (ax < 0 || ay < 0 || bx < 0 || by < 0 || ax >= W || bx >= W || ay >= H || by >= H) continue;
+      const la = lab[ay * W + ax], lb = lab[by * W + bx];
+      if (la >= HW || lb >= HW || la === lb || la === own || lb === own) continue;
+      const A = pl[la], B = pl[lb], C = pl[own];
+      const vx = B[0] - A[0], vy = B[1] - A[1], vz = B[2] - A[2], vv = vx * vx + vy * vy + vz * vz;
+      if (vv < 1) continue;
+      const t = ((C[0] - A[0]) * vx + (C[1] - A[1]) * vy + (C[2] - A[2]) * vz) / vv;
+      if (t < 0.02 || t > 0.98) continue;
+      const res = Math.hypot(A[0] + t * vx - C[0], A[1] + t * vy - C[1], A[2] + t * vz - C[2]);
+      if (res > 12 + 0.25 * Math.sqrt(vv)) continue;
+      // Sisi tujuan: menurut kecerahan piksel terhadap titik tengah kedua sisi.
+      const ya = 0.299 * pal[la].r + 0.587 * pal[la].g + 0.114 * pal[la].b;
+      const yb = 0.299 * pal[lb].r + 0.587 * pal[lb].g + 0.114 * pal[lb].b;
+      if (Math.abs(ya - yb) > 8) out[i] = Math.abs(Y[i] - ya) <= Math.abs(Y[i] - yb) ? la : lb;
+      else out[i] = t < 0.5 ? la : lb;
+    }
+  }
+  lab.set(out);
+}
+
+// Filter mayoritas (mode) pada peta label: tiap piksel mengambil label terbanyak
+// di jendela (2r+1)². Batas antar pita gradien yang bergerigi/berbintik menjadi
+// rata, sehingga garis kontur lebih rapi. Label transparan tidak diubah.
+function majorityFilter(lab, W, H, r, passes) {
+  const N = W * H;
+  const cnt = new Uint16Array(256);
+  let src = lab, dst = new Uint8Array(N);
+  for (let ps = 0; ps < passes; ps++) {
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x, own = src[i];
+        if (own === T) { dst[i] = own; continue; }
+        // Lewati area seragam dengan cepat.
+        if (x > 0 && x < W - 1 && y > 0 && y < H - 1 && src[i - 1] === own && src[i + 1] === own && src[i - W] === own && src[i + W] === own) { dst[i] = own; continue; }
+        const y0 = Math.max(0, y - r), y1 = Math.min(H - 1, y + r), x0 = Math.max(0, x - r), x1 = Math.min(W - 1, x + r);
+        let best = own, bc = 0;
+        for (let yy = y0; yy <= y1; yy++) {
+          for (let xx = x0, j = yy * W + x0; xx <= x1; xx++, j++) {
+            const l = src[j];
+            if (l === T) continue;
+            const c = ++cnt[l];
+            if (c > bc || (c === bc && l === own)) { bc = c; best = l; }
+          }
+        }
+        for (let yy = y0; yy <= y1; yy++) for (let xx = x0, j = yy * W + x0; xx <= x1; xx++, j++) cnt[src[j]] = 0;
+        dst[i] = best;
+      }
+    }
+    const t = src === lab ? new Uint8Array(N) : src;
+    src = dst; dst = t;
+  }
+  if (src !== lab) lab.set(src);
 }
 
 // Garis ala siluet untuk mode warna: batas antara warna garis (palet paling

@@ -121,6 +121,10 @@ function shapes(res, opt) {
       list.push({ color: pal[r.k], subs, regions: [i] });
     });
   }
+  // Urutan gambar tiap region (untuk pengisi celah: hanya meluas ke bawah bentuk sesudahnya).
+  const rank = new Int32Array(res.regions.length).fill(-1);
+  list.forEach((it, n) => { for (const i of it.regions) rank[i] = n; });
+  list.rank = rank;
   return list;
 }
 
@@ -133,14 +137,17 @@ function touchesHidden(res, sub, i, hidden) {
   return false;
 }
 
-// Garis pengisi celah: hanya batas antar dua bentuk yang sama-sama tampil.
-function gapStrokes(res, i, hidden, sinkFactory) {
+// Garis pengisi celah: batas antar dua bentuk yang sama-sama tampil. Dengan rank,
+// hanya batas dengan bentuk yang digambar sesudahnya — garis meluas ke bawah
+// bentuk itu (tertutup), jadi celah tertutup tanpa ada bentuk yang menebal.
+function gapStrokes(res, i, hidden, sinkFactory, rank) {
   const segs = [];
   for (const s of res.regions[i].subs) {
     for (let n = 0; n < s.refs.length; n++) {
       const ref = s.refs[n];
       const ch = res.chains[ref >> 1];
       if (ch.a < 0 || ch.b < 0 || hidden[ch.a] || hidden[ch.b]) continue;
+      if (rank && rank[ch.a === i ? ch.b : ch.a] <= rank[i]) continue;
       const sink = sinkFactory();
       walk([ref], res.chains, sink, false);
       segs.push(sink);
@@ -148,6 +155,10 @@ function gapStrokes(res, i, hidden, sinkFactory) {
   }
   return segs;
 }
+
+// Lebar garis pengisi celah dalam px output: minimal opt.gapWidth, ikut membesar
+// pada artboard besar agar tetap menutup celah saat dilihat diperkecil.
+const gapWidthFor = (opt, OW, res) => Math.max(opt.gapWidth || 1, (2.5 * OW) / res.srcW);
 
 export function buildSVG(res, opt) {
   const { w: OW, h: OH } = opt.size;
@@ -157,20 +168,20 @@ export function buildSVG(res, opt) {
   const parts = [];
   parts.push('<?xml version="1.0" encoding="UTF-8"?>');
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="${OW}" height="${OH}" viewBox="0 0 ${OW} ${OH}">`);
-  if (opt.gapFill) {
-    const gw = num(opt.gapWidth || 1);
-    parts.push(`<g fill="none" stroke-width="${gw}" stroke-linejoin="round" stroke-linecap="round">`);
-    for (const it of items) {
-      const d = [];
-      for (const i of it.regions) for (const sk of gapStrokes(res, i, hidden, () => svgSink(kx, ky))) d.push(sk.text());
-      if (d.length) parts.push(`<path stroke="${hex(it.color)}" d="${d.join('')}"/>`);
-    }
-    parts.push('</g>');
-  }
+  // Pengisi celah: tiap bentuk mendapat garis tepi sewarna di batas dengan bentuk
+  // lain yang tampil, digambar tepat setelah isinya — menutup celah sub-piksel
+  // antar bentuk bersebelahan tanpa membesarkan tepi luar objek.
+  const gw = num(gapWidthFor(opt, OW, res));
   for (const it of items) {
     const sk = svgSink(kx, ky);
     for (const s of it.subs) walk(s.refs, res.chains, sk, true);
-    parts.push(`<path fill="${hex(it.color)}" fill-rule="evenodd" d="${sk.text()}"/>`);
+    const c = hex(it.color);
+    parts.push(`<path fill="${c}" fill-rule="evenodd" d="${sk.text()}"/>`);
+    if (opt.gapFill) {
+      const d = [];
+      for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(kx, ky), items.rank)) d.push(g.text());
+      if (d.length) parts.push(`<path fill="none" stroke="${c}" stroke-width="${gw}" stroke-linejoin="round" d="${d.join('')}"/>`);
+    }
   }
   parts.push('</svg>');
   return parts.join('\n');
@@ -200,18 +211,7 @@ export function buildEPS(res, opt, title) {
   L.push('%%Page: 1 1');
   L.push('gsave');
   const col = (c) => c.map((v) => num(v / 255)).join(' ') + ' rg';
-  if (opt.gapFill) {
-    L.push(`${num(opt.gapWidth || 1)} setlinewidth 1 setlinejoin 1 setlinecap`);
-    for (const it of items) {
-      const sinks = [];
-      for (const i of it.regions) sinks.push(...gapStrokes(res, i, hidden, () => epsSink(kx, ky, OH)));
-      if (!sinks.length) continue;
-      L.push(col(it.color));
-      L.push('newpath');
-      for (const sk of sinks) { sk.end(); L.push(...sk.out); }
-      L.push('s');
-    }
-  }
+  if (opt.gapFill) L.push(`${num(gapWidthFor(opt, OW, res))} setlinewidth 1 setlinejoin 1 setlinecap`);
   for (const it of items) {
     L.push(col(it.color));
     L.push('newpath');
@@ -220,6 +220,15 @@ export function buildEPS(res, opt, title) {
     sk.end();
     L.push(...sk.out);
     L.push('f');
+    if (opt.gapFill) {
+      const sinks = [];
+      for (const i of it.regions) sinks.push(...gapStrokes(res, i, hidden, () => epsSink(kx, ky, OH), items.rank));
+      if (sinks.length) {
+        L.push('newpath');
+        for (const g of sinks) { g.end(); L.push(...g.out); }
+        L.push('s');
+      }
+    }
   }
   L.push('grestore');
   L.push('showpage');
@@ -231,11 +240,18 @@ export function buildEPS(res, opt, title) {
 // Isi <svg> untuk penampil (koordinat kerja, tanpa header).
 export function previewMarkup(res, opt) {
   const items = shapes(res, opt);
+  const hidden = hiddenOf(res, opt);
   const parts = [];
   for (const it of items) {
     const sk = svgSink(1, 1);
     for (const s of it.subs) walk(s.refs, res.chains, sk, true);
-    parts.push(`<path fill="${hex(it.color)}" fill-rule="evenodd" d="${sk.text()}"/>`);
+    const c = hex(it.color);
+    parts.push(`<path fill="${c}" fill-rule="evenodd" d="${sk.text()}"/>`);
+    if (opt.gapFill) {
+      const d = [];
+      for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(1, 1))) d.push(g.text());
+      if (d.length) parts.push(`<path fill="none" stroke="${c}" stroke-width="1" vector-effect="non-scaling-stroke" stroke-linejoin="round" d="${d.join('')}"/>`);
+    }
   }
   return parts.join('');
 }

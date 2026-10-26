@@ -7,8 +7,9 @@ jadi bisa di-host gratis di GitHub Pages.
 ## Fitur
 
 - **Batch**: seret banyak gambar sekaligus (atau tempel dari clipboard). Diproses paralel.
-- **Mode Warna atau Siluet**
+- **Mode Warna, Siluet, atau Gradien**
   - *Warna*: palet otomatis (atau dibatasi), cocok untuk ilustrasi flat.
+  - *Gradien*: untuk gambar penuh gradasi/cahaya (ilustrasi digital, adegan malam). Palet besar (bawaan 64 warna, 16–128) tanpa peleburan agresif; pita peralihan tipis di tepi garis dipindahkan ke sisi yang benar dan batas antar tingkat warna dirapikan (filter mayoritas), sehingga outline tidak berhalo.
   - *Siluet*: untuk stensil, emblem, siluet. Nada **Hitam + abu-abu** (tingkat abu-abu dipertahankan dengan rona aslinya) atau **Hitam saja** (ambang gelap/terang bisa diatur). Dengan latar putih, rongga di dalam siluet bisa **Luar**, **Pintar**, **Semua** (transparan), atau **Isi**.
 - **Upscale sebelum tracing** (default 4×) agar batas warna jatuh di posisi sub-piksel.
 - **Warna latar: Tanpa / Putih / Magenta**. *Tanpa*: tidak ada warna yang dihapus — semua warna (termasuk putih dan magenta) divectorisasi.
@@ -27,7 +28,7 @@ jadi bisa di-host gratis di GitHub Pages.
 - **Format unduhan**: SVG + EPS (`SVG/` dan `EPS/` dalam satu ZIP), hanya SVG, atau hanya EPS.
 - **Palet per gambar**: ganti warna atau jadikan transparan.
 - **Penampil**: Bandingkan (geser), Vektor, Garis (outline), zoom, 1:1, lensa piksel, latar pratinjau gelap/terang (tombol atau tombol keyboard **B**; hanya tampilan, tidak memproses ulang).
-- **Susunan**: Tumpuk (bentuk bersarang tanpa retak) atau Potong (tanpa tumpang tindih), plus pengisi celah opsional.
+- **Susunan**: Tumpuk (bentuk bersarang tanpa retak) atau Potong (tanpa tumpang tindih), plus pengisi celah: tiap bentuk mendapat garis sewarna yang meluas ke bawah bentuk yang digambar sesudahnya, jadi tidak ada retakan saat dilihat diperkecil dan tidak ada bentuk yang menebal.
 
 ## Cara kerja tracing
 

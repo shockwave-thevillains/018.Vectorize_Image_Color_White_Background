@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=202610251336">
+  <link rel="stylesheet" href="styles.css?v=202610260545">
 </head>
 <body>
   <header class="top">
@@ -103,7 +103,14 @@
             <div class="seg wide" data-opt="mode">
               <button type="button" data-v="color">Warna</button>
               <button type="button" data-v="silhouette">Siluet</button>
+              <button type="button" data-v="gradient">Gradien</button>
             </div>
+          </div>
+          <div class="field" data-show="gradient">
+            <label class="flabel" for="gradColors">Jumlah warna <output class="mono" for="gradColors"></output></label>
+            <input type="range" id="gradColors" data-opt="gradColors" min="16" max="128" step="4">
+            <div class="scale mono"><span>ringan</span><span>detail</span></div>
+            <p class="note">Untuk gambar penuh gradasi/cahaya. Gradasi dibentuk dari banyak tingkat warna (seperti vectorizer.ai).</p>
           </div>
           <div class="field" data-show="silhouette">
             <div class="flabel">Nada</div>
@@ -184,7 +191,7 @@
             </div>
             <p class="note" id="cavityNote"></p>
           </div>
-          <div class="field" data-show="color" data-bg="white">
+          <div class="field" data-show="color gradient" data-bg="white">
             <div class="flabel">Putih yang dijadikan transparan</div>
             <div class="seg wide" data-opt="whiteMode">
               <button type="button" data-v="off">Tidak</button>
@@ -195,7 +202,7 @@
             </div>
             <p class="note" id="whiteNote"></p>
           </div>
-          <div class="field" data-show="color silhouette:gray" data-bg="white">
+          <div class="field" data-show="color gradient silhouette:gray" data-bg="white">
             <label class="flabel" for="whiteTol">Toleransi putih <output class="mono" for="whiteTol"></output></label>
             <input type="range" id="whiteTol" data-opt="whiteTol" min="2" max="30" step="1">
           </div>
@@ -269,6 +276,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202610251336"></script>
+  <script type="module" src="app.js?v=202610260545"></script>
 </body>
 </html>
