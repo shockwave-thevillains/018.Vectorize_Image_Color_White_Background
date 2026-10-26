@@ -85,11 +85,20 @@ async function vectorize(file, o, progress, aiMask) {
   // Gradien: grain/noise JPEG di area datar diratakan (bilateral) sebelum palet,
   // supaya area halus menjadi bentuk besar yang mulus; tepi kontras tetap tajam.
   if (o.mode === 'gradient') {
+    // Detail kecil yang kontras (garis tipis, titik, huruf) dilindungi: bobotnya
+    // dihitung dari selisih terhadap rata-rata 5×5 sebelum penghalusan.
+    const keep = detailMask(src, sw, sh, 30, 40);
+    const orig = new Uint8ClampedArray(src);
     const sr = 6 + 0.4 * (o.gradSmooth ?? 30);
     for (let k = 0; k < 2; k++) bilateral(src, sw, sh, 3, 2.2, sr);
     // Gradasi lebar (cahaya lampu, dinding) dihaluskan berjangkauan jauh tanpa
     // menyeberangi tepi kontras → pita warna nanti berkontur mulus.
     domainTransform(src, sw, sh, Math.max(4, Math.min(sw, sh) / 90), 45, 3);
+    for (let i = 0, p = 0; i < keep.length; i++, p += 4) {
+      const m = keep[i];
+      if (!m) continue;
+      src[p] += m * (orig[p] - src[p]); src[p + 1] += m * (orig[p + 1] - src[p + 1]); src[p + 2] += m * (orig[p + 2] - src[p + 2]);
+    }
     g0.putImageData(new ImageData(src, sw, sh), 0, 0);
   }
   const pal = binary
@@ -754,6 +763,21 @@ function edgeSnap(lab, data, W, H, pal, r) {
     }
   }
   lab.set(out);
+}
+
+// Bobot detail 0..1 per piksel: selisih (jumlah |RGB|) terhadap rata-rata 5×5,
+// naik linear dari t0 ke t0+span. Grain kecil → 0; garis tipis/titik → 1.
+function detailMask(px, w, h, t0, span) {
+  const N = w * h;
+  const ch = [new Float32Array(N), new Float32Array(N), new Float32Array(N)];
+  for (let i = 0, p = 0; i < N; i++, p += 4) { ch[0][i] = px[p]; ch[1][i] = px[p + 1]; ch[2][i] = px[p + 2]; }
+  for (const A of ch) boxBlur(A, w, h, 2);
+  const m = new Float32Array(N);
+  for (let i = 0, p = 0; i < N; i++, p += 4) {
+    const d = Math.abs(px[p] - ch[0][i]) + Math.abs(px[p + 1] - ch[1][i]) + Math.abs(px[p + 2] - ch[2][i]);
+    m[i] = Math.max(0, Math.min(1, (d - t0) / span));
+  }
+  return m;
 }
 
 // Domain transform recursive filter (Gastal & Oliveira 2011): penghalus
