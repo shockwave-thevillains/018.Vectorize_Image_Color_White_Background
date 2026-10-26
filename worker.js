@@ -239,6 +239,7 @@ async function vectorize(file, o, progress, aiMask) {
   }
 
   return {
+    mode: o.mode || 'color',
     srcW: sw,
     srcH: sh,
     W,

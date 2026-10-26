@@ -171,13 +171,24 @@ export function buildSVG(res, opt) {
   // Pengisi celah: tiap bentuk mendapat garis tepi sewarna di batas dengan bentuk
   // lain yang tampil, digambar tepat setelah isinya — menutup celah sub-piksel
   // antar bentuk bersebelahan tanpa membesarkan tepi luar objek.
+  const newGap = res.mode === 'gradient';
+  if (opt.gapFill && !newGap) {
+    // Mode Warna/Siluet: lapisan pengisi celah di bawah semua bentuk (seperti semula).
+    parts.push(`<g fill="none" stroke-width="${num(opt.gapWidth || 1)}" stroke-linejoin="round" stroke-linecap="round">`);
+    for (const it of items) {
+      const d = [];
+      for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(kx, ky))) d.push(g.text());
+      if (d.length) parts.push(`<path stroke="${hex(it.color)}" d="${d.join('')}"/>`);
+    }
+    parts.push('</g>');
+  }
   const gw = num(gapWidthFor(opt, OW, res));
   for (const it of items) {
     const sk = svgSink(kx, ky);
     for (const s of it.subs) walk(s.refs, res.chains, sk, true);
     const c = hex(it.color);
     parts.push(`<path fill="${c}" fill-rule="evenodd" d="${sk.text()}"/>`);
-    if (opt.gapFill) {
+    if (opt.gapFill && newGap) {
       const d = [];
       for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(kx, ky), items.rank)) d.push(g.text());
       if (d.length) parts.push(`<path fill="none" stroke="${c}" stroke-width="${gw}" stroke-linejoin="round" d="${d.join('')}"/>`);
@@ -211,7 +222,21 @@ export function buildEPS(res, opt, title) {
   L.push('%%Page: 1 1');
   L.push('gsave');
   const col = (c) => c.map((v) => num(v / 255)).join(' ') + ' rg';
-  if (opt.gapFill) L.push(`${num(gapWidthFor(opt, OW, res))} setlinewidth 1 setlinejoin 1 setlinecap`);
+  const newGap = res.mode === 'gradient';
+  if (opt.gapFill && !newGap) {
+    // Mode Warna/Siluet: lapisan pengisi celah di bawah semua bentuk (seperti semula).
+    L.push(`${num(opt.gapWidth || 1)} setlinewidth 1 setlinejoin 1 setlinecap`);
+    for (const it of items) {
+      const sinks = [];
+      for (const i of it.regions) sinks.push(...gapStrokes(res, i, hidden, () => epsSink(kx, ky, OH)));
+      if (!sinks.length) continue;
+      L.push(col(it.color));
+      L.push('newpath');
+      for (const g of sinks) { g.end(); L.push(...g.out); }
+      L.push('s');
+    }
+  }
+  if (opt.gapFill && newGap) L.push(`${num(gapWidthFor(opt, OW, res))} setlinewidth 1 setlinejoin 1 setlinecap`);
   for (const it of items) {
     L.push(col(it.color));
     L.push('newpath');
@@ -220,7 +245,7 @@ export function buildEPS(res, opt, title) {
     sk.end();
     L.push(...sk.out);
     L.push('f');
-    if (opt.gapFill) {
+    if (opt.gapFill && newGap) {
       const sinks = [];
       for (const i of it.regions) sinks.push(...gapStrokes(res, i, hidden, () => epsSink(kx, ky, OH), items.rank));
       if (sinks.length) {
@@ -247,7 +272,7 @@ export function previewMarkup(res, opt) {
     for (const s of it.subs) walk(s.refs, res.chains, sk, true);
     const c = hex(it.color);
     parts.push(`<path fill="${c}" fill-rule="evenodd" d="${sk.text()}"/>`);
-    if (opt.gapFill) {
+    if (opt.gapFill && res.mode === 'gradient') {
       const d = [];
       for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(1, 1))) d.push(g.text());
       if (d.length) parts.push(`<path fill="none" stroke="${c}" stroke-width="1" vector-effect="non-scaling-stroke" stroke-linejoin="round" d="${d.join('')}"/>`);
