@@ -145,6 +145,10 @@ async function vectorize(file, o, progress, aiMask) {
   const minA = Math.max(1, Math.round(o.minArea * (o.mode === 'gradient' ? 3 : 1) * s * s));
   // Gradien: bintik kecil yang kontras (titik grid, bintang) dipertahankan.
   despeckle(lab, W, H, minA, comp, order, pal, o.mode === 'gradient' ? { de: 22, min: Math.max(2, Math.round(0.8 * s * s)) } : null);
+  if (o.mode === 'gradient') {
+    mergeWeak(lab, data, W, H, pal, s, comp, order);
+    dropSlivers(lab, W, H, pal, s, comp, order);
+  }
   progress(0.45, 'bersih');
 
   // Putih → transparan.
@@ -1080,6 +1084,111 @@ function label(lab, W, H, comp, order) {
     start.push(head0); size.push(tail - head0); lbl.push(l); border.push(touch);
   }
   return { start, size, lbl, border, count: start.length };
+}
+
+// Gradien: bentuk bertetangga yang batasnya tidak bertepatan dengan tepi nyata
+// di gambar (selisih warna kecil di ±1 px sumber dari batas) dan warnanya mirip
+// dilebur — batas "tingkat palet" yang berkeliaran di area datar hilang, batas
+// yang memang ada di gambar tetap. Warna gabungan = warna bagian terluas, dan
+// selisihnya dari warna itu dibatasi supaya gradasi tidak ikut hilang.
+function mergeWeak(lab, data, W, H, pal, s, comp, order, maxEdge = 26, maxDE = 8) {
+  const info = label(lab, W, H, comp, order);
+  const n = info.count, N = W * H;
+  const k = Math.max(1, Math.round(s));
+  const pairs = new Map();
+  const add = (a, b, e) => {
+    if (a === b) return;
+    const key = a < b ? a * n + b : b * n + a;
+    let v = pairs.get(key);
+    if (!v) pairs.set(key, (v = [0, 0]));
+    v[0]++; v[1] += e;
+  };
+  const px = (x, y) => (Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x))) * 4;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x, c = comp[i];
+      if (lab[i] >= HW) continue;
+      // Tepi terkuat di semua jarak 0..k: garis tipis (lebih sempit dari k) tetap terdeteksi.
+      if (x < W - 1 && comp[i + 1] !== c && lab[i + 1] < HW) {
+        let e = 0;
+        for (let d = 0; d <= k; d++) e = Math.max(e, diff(data, px(x - d, y), px(x + 1, y)), diff(data, px(x, y), px(x + 1 + d, y)));
+        add(c, comp[i + 1], e);
+      }
+      if (y < H - 1 && comp[i + W] !== c && lab[i + W] < HW) {
+        let e = 0;
+        for (let d = 0; d <= k; d++) e = Math.max(e, diff(data, px(x, y - d), px(x, y + 1)), diff(data, px(x, y), px(x, y + 1 + d)));
+        add(c, comp[i + W], e);
+      }
+    }
+  }
+  const list = [];
+  for (const [key, v] of pairs) {
+    const m = v[1] / v[0];
+    if (m < maxEdge) list.push([m, Math.floor(key / n), key % n]);
+  }
+  list.sort((p, q) => p[0] - q[0]);
+  const par = Int32Array.from({ length: n }, (_, i) => i);
+  const area = Float64Array.from(info.size);
+  const col = Uint8Array.from(info.lbl);
+  const find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+  const dE = (a, b) => Math.hypot(pal[a].L - pal[b].L, pal[a].A - pal[b].A, pal[a].B - pal[b].B);
+  let merged = 0;
+  for (const [, a0, b0] of list) {
+    const a = find(a0), b = find(b0);
+    if (a === b || dE(col[a], col[b]) > maxDE) continue;
+    const big = area[a] >= area[b] ? a : b, small = big === a ? b : a;
+    par[small] = big; area[big] += area[small];
+    merged++;
+  }
+  if (!merged) return;
+  for (let i = 0; i < N; i++) if (lab[i] < HW) lab[i] = col[find(comp[i])];
+}
+
+// Gradien: pita sangat tipis (lebar rata-rata < ~1,3 px sumber) yang warnanya
+// campuran dua tetangganya (peralihan antialias di sisi garis) dilebur ke
+// tetangga yang paling mirip — tiap garis gambar cukup satu kontur.
+function dropSlivers(lab, W, H, pal, s, comp, order) {
+  const info = label(lab, W, H, comp, order);
+  const n = info.count, N = W * H;
+  const per = new Float64Array(n);
+  for (let i = 0; i < N; i++) {
+    const c = comp[i], x = i % W;
+    if (x < W - 1 && comp[i + 1] !== c) { per[c]++; per[comp[i + 1]]++; }
+    if (i < N - W && comp[i + W] !== c) { per[c]++; per[comp[i + W]]++; }
+  }
+  const dE = (a, b) => Math.hypot(pal[a].L - pal[b].L, pal[a].A - pal[b].A, pal[a].B - pal[b].B);
+  const votes = new Map();
+  let changed = 0;
+  for (let c = 0; c < n; c++) {
+    const own = info.lbl[c];
+    if (own >= HW || !per[c]) continue;
+    if ((2 * info.size[c]) / per[c] >= 1.3 * s) continue;
+    votes.clear();
+    for (let h = info.start[c], e = h + info.size[c]; h < e; h++) {
+      const i = order[h], x = i % W;
+      const see = (q) => { const l = lab[q]; if (l !== own && l < HW) votes.set(l, (votes.get(l) || 0) + 1); };
+      if (x > 0) see(i - 1);
+      if (x < W - 1) see(i + 1);
+      if (i >= W) see(i - W);
+      if (i < N - W) see(i + W);
+    }
+    const top = [...votes].sort((p, q) => q[1] - p[1]).slice(0, 2);
+    if (!top.length) continue;
+    let target = -1;
+    if (top.length === 2) {
+      const A = pal[top[0][0]], B = pal[top[1][0]], C = pal[own];
+      const vx = B.L - A.L, vy = B.A - A.A, vz = B.B - A.B, vv = vx * vx + vy * vy + vz * vz;
+      if (vv > 1) {
+        const t = ((C.L - A.L) * vx + (C.A - A.A) * vy + (C.B - A.B) * vz) / vv;
+        const r = Math.hypot(A.L + t * vx - C.L, A.A + t * vy - C.A, A.B + t * vz - C.B);
+        if (t > 0.05 && t < 0.95 && r < 10) target = dE(own, top[0][0]) <= dE(own, top[1][0]) ? top[0][0] : top[1][0];
+      }
+    }
+    if (target < 0 && dE(own, top[0][0]) < 5) target = top[0][0];
+    if (target < 0) continue;
+    for (let h = info.start[c], e = h + info.size[c]; h < e; h++) lab[order[h]] = target;
+    changed++;
+  }
 }
 
 // Bintik kecil dilebur ke tetangga dengan warna paling mirip (bukan sekadar
