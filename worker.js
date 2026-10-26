@@ -731,6 +731,11 @@ function buildPalette(px, w, h, o) {
   const grad = o.mode === 'gradient';
   // Mode gradien: banyak tingkat warna, tanpa peleburan agresif (gradasi = warna asli).
   const md = grad ? 7 : o.colorMerge;
+  // Putih tidak pernah dilebur ke warna yang jelas berbeda (mis. ungu muda),
+  // berapa pun kepekaan warnanya: putih punya arti khusus (latar/isi putih).
+  const isW = (L, A, B) => L >= 96 && Math.hypot(A, B) < 5;
+  const farW = (L, A, B) => L < 94 || Math.hypot(A, B) > 7;
+  const sepW = (L1, A1, B1, L2, A2, B2) => (isW(L1, A1, B1) && farW(L2, A2, B2)) || (isW(L2, A2, B2) && farW(L1, A1, B1));
   let cl = [];
   for (const k of bins) {
     const L = bl[k * 3], A = bl[k * 3 + 1], Bb = bl[k * 3 + 2];
@@ -738,7 +743,7 @@ function buildPalette(px, w, h, o) {
     for (let j = 0; j < cl.length; j++) {
       const c = cl[j];
       const d = (c.L / c.n - L) ** 2 + (c.A / c.n - A) ** 2 + (c.B / c.n - Bb) ** 2;
-      if (d < bd) { bd = d; best = j; }
+      if (d < bd && !sepW(c.L / c.n, c.A / c.n, c.B / c.n, L, A, Bb)) { bd = d; best = j; }
     }
     const n = C[k];
     if (best >= 0 && Math.sqrt(bd) < md) {
@@ -779,6 +784,7 @@ function buildPalette(px, w, h, o) {
     let mi = -1, mj = -1, mdist = Infinity; // pasangan terdekat
     for (let i = 0; i < P.length; i++) {
       for (let j = i + 1; j < P.length; j++) {
+        if (sepW(P[i].L, P[i].A, P[i].B, P[j].L, P[j].A, P[j].B)) continue;
         const d2 = (P[i].L - P[j].L) ** 2 + (P[i].A - P[j].A) ** 2 + (P[i].B - P[j].B) ** 2;
         const cost = (d2 * P[i].n * P[j].n) / (P[i].n + P[j].n);
         if (cost < wc) { wc = cost; wi = i; wj = j; }
@@ -791,7 +797,7 @@ function buildPalette(px, w, h, o) {
     for (let i = 0; i < P.length && !grad; i++) {
       for (let j = i + 1; j < P.length; j++) {
         const ratio = Math.min(P[i].n, P[j].n) / Math.max(P[i].n, P[j].n);
-        if (ratio > 0.2) continue;
+        if (ratio > 0.2 || sepW(P[i].L, P[i].A, P[i].B, P[j].L, P[j].A, P[j].B)) continue;
         const d = Math.sqrt((P[i].L - P[j].L) ** 2 + (P[i].A - P[j].A) ** 2 + (P[i].B - P[j].B) ** 2);
         if (d < md * 1.6 && d < vd) { vd = d; vi = i; vj = j; }
       }
