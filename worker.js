@@ -82,6 +82,13 @@ async function vectorize(file, o, progress, aiMask) {
     }
     g0.putImageData(new ImageData(src, sw, sh), 0, 0);
   }
+  // Gradien: grain/noise JPEG di area datar diratakan (bilateral) sebelum palet,
+  // supaya area halus menjadi bentuk besar yang mulus; tepi kontras tetap tajam.
+  if (o.mode === 'gradient') {
+    const sr = 6 + 0.4 * (o.gradSmooth ?? 30);
+    for (let k = 0; k < 2; k++) bilateral(src, sw, sh, 3, 2.2, sr);
+    g0.putImageData(new ImageData(src, sw, sh), 0, 0);
+  }
   const pal = binary
     ? [{ r: 0, g: 0, b: 0, L: 0, A: 0, B: 0, n: 2 }, { r: 255, g: 255, b: 255, L: 100, A: 0, B: 0, n: 1 }]
     : buildPalette(src, sw, sh, o);
@@ -133,7 +140,8 @@ async function vectorize(file, o, progress, aiMask) {
   const comp = new Int32Array(N);
   // Gradien: noise JPEG antar tingkat warna yang berdekatan dibuang lebih tegas.
   const minA = Math.max(1, Math.round(o.minArea * (o.mode === 'gradient' ? 3 : 1) * s * s));
-  despeckle(lab, W, H, minA, comp, order, pal);
+  // Gradien: bintik kecil yang kontras (titik grid, bintang) dipertahankan.
+  despeckle(lab, W, H, minA, comp, order, pal, o.mode === 'gradient' ? { de: 22, min: Math.max(2, Math.round(0.8 * s * s)) } : null);
   progress(0.45, 'bersih');
 
   // Putih → transparan.
@@ -685,7 +693,7 @@ function assignLabels(data, W, H, s, pal, o) {
   }
   if (o.mode === 'gradient') {
     edgeSnap(lab, data, W, H, pal, Math.max(2, Math.round(1.6 * s)));
-    majorityFilter(lab, W, H, Math.max(1, Math.round(s * 0.6)), 2);
+    majorityFilter(lab, W, H, Math.max(1, Math.round(s * 0.6)), 2, pal, 20);
   }
   else if (o.lineThreshold !== false) lineThreshold(lab, data, W, H, pal);
   return lab;
@@ -741,10 +749,40 @@ function edgeSnap(lab, data, W, H, pal, r) {
   lab.set(out);
 }
 
+// Filter bilateral (jendela (2r+1)², sigma ruang ss, sigma warna sr dalam RGB):
+// rata-rata berbobot tetangga yang dekat posisinya DAN warnanya. Grain halus
+// diratakan; tepi kontras (selisih >> sr) tidak tercampur.
+function bilateral(px, w, h, r, ss, sr) {
+  const src = new Uint8ClampedArray(px);
+  const sw = [];
+  for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) sw.push([dx, dy, Math.exp(-(dx * dx + dy * dy) / (2 * ss * ss))]);
+  const LUT = new Float32Array(12300);
+  for (let k = 0; k < LUT.length; k++) LUT[k] = Math.exp(-(k * 16) / (2 * sr * sr));
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const p = (y * w + x) * 4;
+      if (src[p + 3] < 255) continue;
+      const r0 = src[p], g0 = src[p + 1], b0 = src[p + 2];
+      let ar = 0, ag = 0, ab = 0, ws = 0;
+      for (const [dx, dy, wsp] of sw) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const q = (yy * w + xx) * 4;
+        if (src[q + 3] < 255) continue;
+        const dr = src[q] - r0, dg = src[q + 1] - g0, db = src[q + 2] - b0;
+        const wt = wsp * LUT[(dr * dr + dg * dg + db * db) >> 4];
+        ar += wt * src[q]; ag += wt * src[q + 1]; ab += wt * src[q + 2]; ws += wt;
+      }
+      px[p] = ar / ws; px[p + 1] = ag / ws; px[p + 2] = ab / ws;
+    }
+  }
+}
+
 // Filter mayoritas (mode) pada peta label: tiap piksel mengambil label terbanyak
 // di jendela (2r+1)². Batas antar pita gradien yang bergerigi/berbintik menjadi
 // rata, sehingga garis kontur lebih rapi. Label transparan tidak diubah.
-function majorityFilter(lab, W, H, r, passes) {
+function majorityFilter(lab, W, H, r, passes, pal, maxDE) {
+  const close = (a, b) => !pal || Math.hypot(pal[a].L - pal[b].L, pal[a].A - pal[b].A, pal[a].B - pal[b].B) <= maxDE;
   const N = W * H;
   const cnt = new Uint16Array(256);
   let src = lab, dst = new Uint8Array(N);
@@ -766,7 +804,7 @@ function majorityFilter(lab, W, H, r, passes) {
           }
         }
         for (let yy = y0; yy <= y1; yy++) for (let xx = x0, j = yy * W + x0; xx <= x1; xx++, j++) cnt[src[j]] = 0;
-        dst[i] = best;
+        dst[i] = best !== own && !close(own, best) ? own : best;
       }
     }
     const t = src === lab ? new Uint8Array(N) : src;
@@ -997,7 +1035,7 @@ function label(lab, W, H, comp, order) {
 
 // Bintik kecil dilebur ke tetangga dengan warna paling mirip (bukan sekadar
 // kontak terpanjang) agar potongan garis tipis tidak tertelan latar.
-function despeckle(lab, W, H, minA, comp, order, pal) {
+function despeckle(lab, W, H, minA, comp, order, pal, keep) {
   const cd = (a, b) => Math.hypot(pal[a].L - pal[b].L, pal[a].A - pal[b].A, pal[a].B - pal[b].B);
   const N = W * H;
   for (let pass = 0; pass < 2; pass++) {
@@ -1027,6 +1065,7 @@ function despeckle(lab, W, H, minA, comp, order, pal) {
         const sc = cd(own, l) / Math.sqrt(votes[l] / maxV);
         if (sc < bs) { bs = sc; best = l; }
       }
+      if (keep && info.size[c] >= keep.min && cd(own, best) > keep.de) continue;
       for (let h = s0; h < s1; h++) lab[order[h]] = best;
     }
   }
