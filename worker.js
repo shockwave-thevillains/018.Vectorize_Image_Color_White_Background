@@ -87,6 +87,9 @@ async function vectorize(file, o, progress, aiMask) {
   if (o.mode === 'gradient') {
     const sr = 6 + 0.4 * (o.gradSmooth ?? 30);
     for (let k = 0; k < 2; k++) bilateral(src, sw, sh, 3, 2.2, sr);
+    // Gradasi lebar (cahaya lampu, dinding) dihaluskan berjangkauan jauh tanpa
+    // menyeberangi tepi kontras → pita warna nanti berkontur mulus.
+    domainTransform(src, sw, sh, Math.max(4, Math.min(sw, sh) / 90), 45, 3);
     g0.putImageData(new ImageData(src, sw, sh), 0, 0);
   }
   const pal = binary
@@ -747,6 +750,52 @@ function edgeSnap(lab, data, W, H, pal, r) {
     }
   }
   lab.set(out);
+}
+
+// Domain transform recursive filter (Gastal & Oliveira 2011): penghalus
+// penjaga tepi O(N). Jarak antar piksel "diregangkan" sebanding selisih warna,
+// sehingga perataan berhenti di tepi kontras. ss = jangkauan ruang (px),
+// sr = kepekaan warna (jumlah selisih RGB).
+function domainTransform(px, w, h, ss, sr, iters) {
+  const N = w * h;
+  const C = [new Float32Array(N), new Float32Array(N), new Float32Array(N)];
+  for (let i = 0, p = 0; i < N; i++, p += 4) { C[0][i] = px[p]; C[1][i] = px[p + 1]; C[2][i] = px[p + 2]; }
+  const k = ss / sr;
+  const dx = new Float32Array(N), dy = new Float32Array(N);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x, p = i * 4;
+      if (x > 0) {
+        const q = p - 4;
+        dx[i] = px[p + 3] < 255 || px[q + 3] < 255 ? 1e4 : 1 + k * (Math.abs(px[p] - px[q]) + Math.abs(px[p + 1] - px[q + 1]) + Math.abs(px[p + 2] - px[q + 2]));
+      }
+      if (y > 0) {
+        const q = p - w * 4;
+        dy[i] = px[p + 3] < 255 || px[q + 3] < 255 ? 1e4 : 1 + k * (Math.abs(px[p] - px[q]) + Math.abs(px[p + 1] - px[q + 1]) + Math.abs(px[p + 2] - px[q + 2]));
+      }
+    }
+  }
+  const wx = new Float32Array(N), wy = new Float32Array(N);
+  for (let it = 0; it < iters; it++) {
+    const sH = (ss * Math.sqrt(3) * Math.pow(2, iters - it - 1)) / Math.sqrt(Math.pow(4, iters) - 1);
+    const a = Math.exp(-Math.SQRT2 / sH);
+    for (let i = 0; i < N; i++) { wx[i] = Math.pow(a, dx[i]); wy[i] = Math.pow(a, dy[i]); }
+    for (const I of C) {
+      for (let y = 0; y < h; y++) {
+        const o = y * w;
+        for (let x = 1; x < w; x++) I[o + x] += wx[o + x] * (I[o + x - 1] - I[o + x]);
+        for (let x = w - 2; x >= 0; x--) I[o + x] += wx[o + x + 1] * (I[o + x + 1] - I[o + x]);
+      }
+      for (let x = 0; x < w; x++) {
+        for (let y = 1; y < h; y++) { const i = y * w + x; I[i] += wy[i] * (I[i - w] - I[i]); }
+        for (let y = h - 2; y >= 0; y--) { const i = y * w + x; I[i] += wy[i + w] * (I[i + w] - I[i]); }
+      }
+    }
+  }
+  for (let i = 0, p = 0; i < N; i++, p += 4) {
+    if (px[p + 3] < 255) continue;
+    px[p] = C[0][i]; px[p + 1] = C[1][i]; px[p + 2] = C[2][i];
+  }
 }
 
 // Filter bilateral (jendela (2r+1)², sigma ruang ss, sigma warna sr dalam RGB):
